@@ -6,6 +6,10 @@ export default {
       return;
     }
 
+    if (document.querySelector(`script[src*="recaptcha"]`)) {
+      return;
+    }
+
     const script = document.createElement('script');
     script.src = `https://www.google.com/recaptcha/api.js?render=${siteKey}`;
     script.async = true;
@@ -13,9 +17,27 @@ export default {
     document.head.appendChild(script);
   },
 
+  async waitForReady(timeout: number = 5000): Promise<boolean> {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      const grecaptcha = (window as any).grecaptcha;
+      if (grecaptcha && typeof grecaptcha.execute === 'function') {
+        return true;
+      }
+      await new Promise(r => setTimeout(r, 100));
+    }
+    return false;
+  },
+
   async execute(action: string = 'pse_payment'): Promise<string> {
     const siteKey: string | undefined = import.meta.env.VITE_RECAPTCHA_SITE_KEY;
     if (!siteKey) {
+      return '';
+    }
+
+    const ready = await this.waitForReady();
+    if (!ready) {
+      console.warn('reCAPTCHA no se cargo en tiempo esperado');
       return '';
     }
 
