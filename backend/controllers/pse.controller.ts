@@ -1,0 +1,250 @@
+import { Request, Response } from 'express';
+import pseService from '../services/pse.service';
+import { FINAL_STATES } from '../config/constants';
+import doublePaymentService from '../services/doublePayment.service';
+import { getPSEErrorMessage } from '../utils/errorMessages';
+import logger from '../utils/logger';
+import { CreateTransactionInput } from '../validation/schemas';
+import { PSEApiResponse } from '../../shared/types/pse-api';
+
+const MOCK_BANKS = [
+  { financialInstitutionCode: '001', financialInstitutionName: 'BANCO DE BOGOTA' },
+  { financialInstitutionCode: '007', financialInstitutionName: 'BANCO DAVIVIENDA' },
+  { financialInstitutionCode: '006', financialInstitutionName: 'BANCO DE OCCIDENTE' },
+  { financialInstitutionCode: '009', financialInstitutionName: 'BANCO POPULAR' },
+  { financialInstitutionCode: '012', financialInstitutionName: 'BANCO COLPATRA' },
+  { financialInstitutionCode: '013', financialInstitutionName: 'BANCO COLMENA' },
+  { financialInstitutionCode: '023', financialInstitutionName: 'BANCO CONTINENTAL' },
+  { financialInstitutionCode: '032', financialInstitutionName: 'BANCO SANTANDER' },
+  { financialInstitutionCode: '040', financialInstitutionName: 'BANCO BBVA COLOMBIA' },
+  { financialInstitutionCode: '052', financialInstitutionName: 'BANCO FALABELLA' },
+  { financialInstitutionCode: '058', financialInstitutionName: 'BANCO MUNDO MUJER' },
+  { financialInstitutionCode: '059', financialInstitutionName: 'BANCO VILLAS' },
+  { financialInstitutionCode: '060', financialInstitutionName: 'BANCO PICHINCHA' },
+  { financialInstitutionCode: '061', financialInstitutionName: 'BANCO PROMERICA' },
+  { financialInstitutionCode: '062', financialInstitutionName: 'BANCO W' },
+  { financialInstitutionCode: '063', financialInstitutionName: 'BANCO SERFINANZA' },
+  { financialInstitutionCode: '065', financialInstitutionName: 'BANCO BLUE' },
+  { financialInstitutionCode: '066', financialInstitutionName: 'BANCO COOPERATIVO COOPCENTRAL' },
+  { financialInstitutionCode: '067', financialInstitutionName: 'BANCO Caja Social' },
+  { financialInstitutionCode: '069', financialInstitutionName: 'BANCO AV VILLAS' },
+  { financialInstitutionCode: '070', financialInstitutionName: 'BANCO DE CREDITO' },
+  { financialInstitutionCode: '107', financialInstitutionName: 'BANCO CAJA SOCIAL' },
+  { financialInstitutionCode: '112', financialInstitutionName: 'BANCO PRODUBANCO' },
+  { financialInstitutionCode: '120', financialInstitutionName: 'BANCO ITAU' }
+];
+
+class PSEController {
+  async getBankList(req: Request, res: Response): Promise<void> {
+    try {
+      let banks: PSEApiResponse;
+      try {
+        banks = await pseService.getBankList();
+      } catch (error) {
+        logger.warn('PSE API no disponible, usando bancos mock');
+        banks = { returnCode: 'SUCCESS', banks: MOCK_BANKS } as unknown as PSEApiResponse;
+      }
+      res.json({
+        success: true,
+        data: banks.banks || MOCK_BANKS,
+        message: 'Lista de bancos obtenida exitosamente'
+      });
+    } catch (error) {
+      logger.error('Error en getBankList:', (error as Error).message);
+      res.status(500).json({
+        success: false,
+        message: (error as Error).message || 'Error al obtener lista de bancos'
+      });
+    }
+  }
+
+  async createTransaction(req: Request, res: Response): Promise<void> {
+    try {
+      const paymentData: CreateTransactionInput = req.body;
+
+      const doublePaymentCheck = await doublePaymentService.check(
+        paymentData.ticketId || Date.now() + Math.floor(Math.random() * 1000)
+      );
+
+      if (doublePaymentCheck.exists) {
+        const message: string = doublePaymentService.getErrorMessage(
+          doublePaymentCheck,
+          paymentData.ticketId || 'unknown'
+        );
+        res.status(409).json({
+          success: false,
+          code: 'FAIL_DOUBLEPAYMENT',
+          message
+        });
+        return;
+      }
+
+      let result: PSEApiResponse;
+      try {
+        result = await pseService.createTransaction(paymentData);
+      } catch (error) {
+        if (process.env.NODE_ENV !== 'production') {
+          logger.warn('PSE API no disponible, usando respuesta mock');
+          const mockCus = 'CUS_' + Date.now().toString().slice(-6);
+          const mockTicketId = paymentData.ticketId || Date.now();
+          result = {
+            returnCode: 'SUCCESS',
+            trazabilityCode: mockCus,
+            pseURL: `https://apicer.pse.com.co/mock-payment?cus=${mockCus}&bank=${paymentData.bankCode}`,
+            transactionCycle: 1
+          } as unknown as PSEApiResponse;
+        } else {
+          throw error;
+        }
+      }
+
+      if (result.returnCode === 'SUCCESS') {
+        logger.info(`Transaccion creada: CUS=${result.trazabilityCode}, score=${(req as any).recaptchaScore}`);
+        res.json({
+          success: true,
+          data: {
+            trazabilityCode: result.trazabilityCode,
+            pseURL: result.pseURL,
+            ticketId: paymentData.ticketId || Date.now(),
+            transactionCycle: result.transactionCycle
+          },
+          message: 'Transaccion creada exitosamente'
+        });
+        return;
+      }
+
+      res.status(400).json({
+        success: false,
+        code: result.returnCode,
+        message: getPSEErrorMessage(result.returnCode),
+        details: result.errorDetails || null
+      });
+
+    } catch (error) {
+      logger.error('Error en createTransaction:', (error as Error).message);
+
+      const errMsg: string = (error as Error).message;
+      if (errMsg.includes('requerido') ||
+          errMsg.includes('prohibidos') ||
+          errMsg.includes('serviceCode')) {
+        res.status(400).json({
+          success: false,
+          code: 'FAIL_VALIDATION',
+          message: errMsg
+        });
+        return;
+      }
+
+      res.status(500).json({
+        success: false,
+        message: errMsg || 'Error al crear la transaccion'
+      });
+    }
+  }
+
+  async getTransactionStatus(req: Request, res: Response): Promise<void> {
+    try {
+      const { trazabilityCode } = req.params;
+
+      let result: PSEApiResponse;
+      try {
+        result = await pseService.getTransactionInformation(trazabilityCode);
+      } catch (error) {
+        if (process.env.NODE_ENV !== 'production') {
+          logger.warn('PSE API no disponible, usando estado mock');
+          result = {
+            returnCode: 'SUCCESS',
+            transactionState: 'OK',
+            trazabilityCode,
+            bankProcessingDate: new Date().toISOString(),
+            authorizationID: 'AUTH_' + Date.now()
+          } as unknown as PSEApiResponse;
+        } else {
+          throw error;
+        }
+      }
+
+      if (result.transactionState && FINAL_STATES.includes(result.transactionState as any)) {
+        try {
+          if (result.transactionState === 'OK') {
+            await pseService.finalizeTransaction(trazabilityCode, result.authorizationID || null);
+          }
+        } catch (finalizeError) {
+          logger.warn('Error al finalizar transaccion:', (finalizeError as Error).message);
+        }
+      }
+
+      res.json({
+        success: true,
+        data: result,
+        message: 'Estado de transaccion consultado exitosamente'
+      });
+    } catch (error) {
+      logger.error('Error en getTransactionStatus:', (error as Error).message);
+      res.status(500).json({
+        success: false,
+        message: (error as Error).message || 'Error al consultar el estado de la transaccion'
+      });
+    }
+  }
+
+  async getTransactionDetailed(req: Request, res: Response): Promise<void> {
+    try {
+      const { trazabilityCode } = req.params;
+
+      let result: PSEApiResponse;
+      try {
+        result = await pseService.getTransactionInformationDetailed(trazabilityCode);
+      } catch (error) {
+        if (process.env.NODE_ENV !== 'production') {
+          logger.warn('PSE API no disponible, usando detalle mock');
+          result = {
+            returnCode: 'SUCCESS',
+            transactionState: 'OK',
+            trazabilityCode,
+            bankProcessingDate: new Date().toISOString(),
+            authorizationID: 'AUTH_' + Date.now(),
+            transactionValue: 10000,
+            vatValue: 0
+          } as unknown as PSEApiResponse;
+        } else {
+          throw error;
+        }
+      }
+
+      res.json({
+        success: true,
+        data: result,
+        message: 'Informacion detallada obtenida exitosamente'
+      });
+    } catch (error) {
+      logger.error('Error en getTransactionDetailed:', (error as Error).message);
+      res.status(500).json({
+        success: false,
+        message: (error as Error).message || 'Error al obtener informacion detallada'
+      });
+    }
+  }
+
+  async finalizeTransaction(req: Request, res: Response): Promise<void> {
+    try {
+      const { trazabilityCode, authorizationId } = req.body;
+
+      const result: PSEApiResponse = await pseService.finalizeTransaction(trazabilityCode, authorizationId);
+
+      res.json({
+        success: true,
+        data: result,
+        message: 'Transaccion finalizada exitosamente'
+      });
+    } catch (error) {
+      logger.error('Error en finalizeTransaction:', (error as Error).message);
+      res.status(500).json({
+        success: false,
+        message: (error as Error).message || 'Error al finalizar la transaccion'
+      });
+    }
+  }
+}
+
+export default new PSEController();
