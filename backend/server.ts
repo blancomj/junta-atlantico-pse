@@ -8,7 +8,7 @@ import morgan from 'morgan';
 import config from './config/pse.config';
 import pseRoutes from './routes/pse.routes';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware';
-import { securityHeaders, validateOrigin } from './middleware/securityHeaders.middleware';
+import { securityHeaders, validateOrigin, getAllowedOrigins } from './middleware/securityHeaders.middleware';
 import { requestIdMiddleware } from './middleware/requestId.middleware';
 import { sanitizeInput } from './middleware/sanitize.middleware';
 import logger from './utils/logger';
@@ -44,9 +44,7 @@ app.use(helmet({
 
 // CORS estricto
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production'
-    ? ['https://www.juntaatlantico.co', 'https://juntaatlantico.co']
-    : ['http://localhost:5173', 'http://localhost:3000'],
+  origin: getAllowedOrigins(),
   credentials: true,
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id', 'X-Recaptcha-Token']

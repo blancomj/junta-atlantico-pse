@@ -15,7 +15,8 @@ const IdentificationTypeEnum = z.enum([
 
 export const createTransactionSchema = z.object({
   bankCode: z.string().min(1, 'Codigo de banco requerido'),
-  amount: z.number().positive('El monto debe ser mayor a 0'),
+  amount: z.number().positive('El monto debe ser mayor a 0')
+    .refine((n) => /^\d+(\.\d{1,2})?$/.test(n.toString()), 'El monto no puede tener mas de 2 decimales'),
   userType: UserTypeEnum,
   identificationType: IdentificationTypeEnum,
   identificationNumber: z.string().min(1, 'Numero de identificacion requerido'),
@@ -27,7 +28,9 @@ export const createTransactionSchema = z.object({
   reference1: z.string().max(80).optional().default(''),
   reference2: z.string().max(80).optional().default(''),
   reference3: z.string().max(80).optional().default(''),
-  vat: z.number().min(0).optional().default(0),
+  vat: z.number().min(0)
+    .refine((n) => /^\d+(\.\d{1,2})?$/.test(n.toString()), 'El IVA no puede tener mas de 2 decimales')
+    .optional().default(0),
   serviceCode: z.string().max(10).optional().default(''),
   indicator4per1000: z.number().int().min(0).max(1).optional().default(0),
   ticketId: z.union([z.string(), z.number()]).optional(),
@@ -37,19 +40,19 @@ export const createTransactionSchema = z.object({
     if (data.userType === 'person' && data.identificationType === 'NIT') return false;
     return true;
   },
-  { message: 'Si el tipo de persona es "person", el tipo de identificacion no puede ser NIT' }
+  { message: 'Si el tipo de persona es "person", el tipo de identificacion no puede ser NIT', path: ['identificationType'] }
 ).refine(
   (data) => {
     if (data.userType === 'company' && data.identificationType !== 'NIT') return false;
     return true;
   },
-  { message: 'Si el tipo de persona es "company", el unico tipo de identificacion valido es NIT' }
+  { message: 'Si el tipo de persona es "company", el unico tipo de identificacion valido es NIT', path: ['identificationType'] }
 ).refine(
   (data) => {
     const forbidden = /[|"]/;
     return !forbidden.test(data.description);
   },
-  { message: 'La descripcion no puede contener los caracteres | ni "' }
+  { message: 'La descripcion no puede contener los caracteres | ni "', path: ['description'] }
 );
 
 export const finalizeTransactionSchema = z.object({

@@ -115,7 +115,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, Ref, ComputedRef } from 'vue';
+import { ref, onMounted, onUnmounted, computed, Ref, ComputedRef } from 'vue';
 import { useRouter } from 'vue-router';
 import apiService from '../services/api.service';
 import RejectionReason from '../components/RejectionReason.vue';
@@ -167,6 +167,21 @@ function formatDate(iso: string): string {
   }
 }
 
+// Limpia toda la informacion de la transaccion del navegador, incluyendo
+// pse_form_data (nombre, email, celular, direccion, identificacion).
+function clearSession(): void {
+  sessionStorage.removeItem('pse_trazability_code');
+  sessionStorage.removeItem('pse_ticket_id');
+  sessionStorage.removeItem('pse_form_data');
+}
+
+// CORRECCION: detener el polling al desmontar la vista. Antes, si el usuario
+// navegaba/recargaba durante el polling, el bucle seguia corriendo en segundo
+// plano (hasta 30 min) disparando llamadas al backend.
+onUnmounted(() => {
+  stopPolling();
+});
+
 onMounted(async () => {
   let trazabilityCode: string | null = new URLSearchParams(window.location.search).get('trazabilityCode');
   if (!trazabilityCode) {
@@ -217,9 +232,7 @@ async function checkTransactionWithPolling(trazabilityCode: string): Promise<voi
 
 async function loadDetailedIfNeeded(trazabilityCode: string): Promise<void> {
   if (transactionState.value === 'OK') {
-    sessionStorage.removeItem('pse_trazability_code');
-    sessionStorage.removeItem('pse_ticket_id');
-    sessionStorage.removeItem('pse_form_data');
+    clearSession();
     return;
   }
 
@@ -230,6 +243,11 @@ async function loadDetailedIfNeeded(trazabilityCode: string): Promise<void> {
     }
   } catch (err) {
     console.warn('No se pudo cargar detalle:', err);
+  }
+
+  // Estados terminales no exitosos: se borra al menos la PII del navegador.
+  if (['NOT_AUTHORIZED', 'FAILED'].includes(transactionState.value)) {
+    clearSession();
   }
 }
 
