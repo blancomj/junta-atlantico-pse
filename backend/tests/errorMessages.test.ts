@@ -6,7 +6,27 @@ describe('ErrorMessages', () => {
     test('should return literal message for FAIL_EXCEEDEDLIMIT', () => {
       const msg = errorMessages.getPSEErrorMessage('FAIL_EXCEEDEDLIMIT');
       expect(msg).toContain('excede los limites');
-      expect(msg).toContain('facturacion@juntaatlantico.co');
+      expect(msg).toContain('comuniquese con la empresa');
+    });
+
+    test('should return generic message for #7 listed codes', () => {
+      const codes = [
+        'FAIL_ENTITYNOTEXISTSORDISABLED',
+        'FAIL_BANKNOTEXISTSORDISABLED',
+        'FAIL_SERVICENOTEXISTSORNOTCONFIGURED',
+        'FAIL_INVALIDAMOUNTORVATAMOUNT',
+        'FAIL_INVALIDSOLICITDATE',
+        'FAIL_CANNOTGETCURRENTCYCLE',
+        'FAIL_ACCESSDENIED',
+        'FAIL_TRANSACTIONNOTALLOWED',
+        'FAIL_INVALIDPARAMETERS',
+        'FAIL_GENERICERROR'
+      ];
+      for (const code of codes) {
+        expect(errorMessages.getPSEErrorMessage(code)).toBe(
+          'No se pudo crear la transaccion, por favor intente mas tarde o comuniquese con la empresa'
+        );
+      }
     });
 
     test('should return literal message for FAIL_BANKUNREACHEABLE', () => {

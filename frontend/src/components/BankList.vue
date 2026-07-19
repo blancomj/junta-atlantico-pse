@@ -10,7 +10,7 @@
     <select
       v-else
       :value="modelValue"
-      @change="$emit('update:modelValue', ($event.target as HTMLSelectElement).value)"
+      @change="onSelect(($event.target as HTMLSelectElement).value)"
       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
       :class="{ 'border-red-500': error }"
     >
@@ -37,13 +37,23 @@ defineProps<{
   error?: string;
 }>();
 
-defineEmits<{
-  (e: 'update:modelValue', value: string): void;
-}>();
-
 const store = usePaymentStore();
 
 const { loading, banks } = storeToRefs(store);
+
+const emit = defineEmits<{
+  (e: 'update:modelValue', value: string): void;
+}>();
+
+// Emite la selección y persiste el NOMBRE del banco para poder mostrarlo en el
+// comprobante final (Requisito PSE #11), ya que el formulario solo maneja el código.
+function onSelect(code: string): void {
+  emit('update:modelValue', code);
+  const bank = store.banks.find((b) => b.financialInstitutionCode === code);
+  if (bank) {
+    sessionStorage.setItem('pse_bank_name', bank.financialInstitutionName);
+  }
+}
 
 onMounted(() => {
   if (store.banks.length === 0) {

@@ -1,5 +1,5 @@
 # 📦 PLAN DE IMPLEMENTACIÓN v2.1 — INTEGRACIÓN PSE AVANZA
-> **v2.1 (post-implementación):** código fuente actualizado a **TypeScript** (tal como está implementado en el repositorio) e incorporadas las correcciones de reCAPTCHA v3, validación de decimales, orígenes por entorno y limpieza del polling/PII. Ver **§16. Registro de cambios v2.1** al final.
+> **v2.1 (post-implementación):** código fuente actualizado a **TypeScript** (tal como está implementado en el repositorio) e incorporadas las correcciones de reCAPTCHA v3, validación de decimales, orígenes por entorno y limpieza del polling/PII, más los **ajustes de certificación PSE-ACH (14 puntos)**. Ver **§16. Registro de cambios v2.1** al final.
 ## Ajustado a Instructivo ACH Colombia **Versión 21 (Octubre 2025)**
 
 ### JUNTA REGIONAL DE CALIFICACIÓN DE INVALIDEZ DEL ATLÁNTICO — Junta Atlántico S.A.S.
@@ -394,6 +394,9 @@ ALLOWED_ORIGIN=https://www.juntaatlantico.co
 # Validacion de Origin (opcional, Seccion 11 ACH): si es 'true' rechaza
 # peticiones sin cabecera Origin/Referer. Por defecto desactivado.
 STRICT_ORIGIN=false
+# Cache de lista de bancos (Requisito PSE #4: GetBankListNF <= 1 vez/dia)
+BANK_LIST_CACHE_TTL_MS=86400000
+BANK_LIST_FALLBACK_TTL_MS=300000
 LOG_LEVEL=info
 
 # ============================================
@@ -418,6 +421,13 @@ VITE_PSE_SERVICE_CODE=1234567890
 
 # reCAPTCHA v3
 VITE_RECAPTCHA_SITE_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# Datos del comercio para el comprobante (Requisito #11)
+VITE_COMPANY_NIT=901234567-8
+VITE_COMPANY_NAME=JUNTA ATLANTICO S.A.S.
+# Contacto para estados PENDING / error (Requisitos #6, #7, #11)
+VITE_CONTACT_PHONE=(605) 333-XXXX
+VITE_CONTACT_EMAIL=facturacion@juntaatlantico.co
 
 # Otros
 VITE_POLLING_INTERVAL_MS=180000
@@ -759,6 +769,7 @@ junta-atlantico-pse/
 │   │   ├── encryption.service.ts       # AES-256-GCM
 │   │   ├── token.service.ts            # OAuth 2.0 con caché
 │   │   ├── pse.service.ts              # Cliente PSE
+│   │   ├── bankList.service.ts         # Caché diaria de bancos (Req #4) + orden alfabético (Req #8)
 │   │   ├── recaptcha.service.ts        # Verify reCAPTCHA v3
 │   │   └── doublePayment.service.ts    # Control de doble pago
 │   ├── controllers/
@@ -1096,7 +1107,7 @@ export interface APIErrorResponse {
   "description": "Backend para integración PSE Avanza v21",
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "dev": "ts-node server.ts",
     "test": "jest --forceExit --detectOpenHandles",
@@ -1157,6 +1168,7 @@ export interface APIErrorResponse {
     "allowSyntheticDefaultImports": true,
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
+    "types": ["node", "jest"],
     "typeRoots": ["./node_modules/@types", "../shared/types"],
     "paths": {
       "@shared/*": ["../shared/*"]
@@ -1168,8 +1180,7 @@ export interface APIErrorResponse {
   ],
   "exclude": [
     "node_modules",
-    "dist",
-    "tests"
+    "dist"
   ]
 }
 ```
@@ -1520,9 +1531,16 @@ class PSEService {
       userType: paymentData.userType,
       soliciteDate: nowColombiaISO(),
       paymentDescription: paymentData.description || 'Pago en Junta Atlantico',
+      // Requisito PSE #13: las 3 referencias son OBLIGATORIAS y deben corresponder
+      // a las requeridas para el tipo de vinculacion (Desarrollo Independiente)
+      // segun el Manual de Buenas Practicas. Los valores por defecto de abajo son
+      // un mapeo sensato y NO vacio; CONFIRMAR contra el manual antes de certificar.
+      //   referenceNumber1 -> identificacion del pagador
+      //   referenceNumber2 -> ticketId (referencia unica de la transaccion)
+      //   referenceNumber3 -> codigo de servicio
       referenceNumber1: paymentData.reference1 || paymentData.identificationNumber || '',
-      referenceNumber2: paymentData.reference2 || '',
-      referenceNumber3: paymentData.reference3 || '',
+      referenceNumber2: paymentData.reference2 || String(paymentData.ticketId || '') || 'N/A',
+      referenceNumber3: paymentData.reference3 || this.serviceCode || paymentData.serviceCode || 'N/A',
       identificationType: paymentData.identificationType,
       identificationNumber: paymentData.identificationNumber,
       fullName: paymentData.fullName,
@@ -1618,7 +1636,104 @@ class PSEService {
 export default new PSEService();
 ```
 
-### 9.8 `backend/services/recaptcha.service.ts`
+### 9.8 `backend/services/bankList.service.ts`
+
+```typescript
+import pseService from './pse.service';
+import logger from '../utils/logger';
+import { BankItem } from '../../shared/types/bank';
+import { PSEApiResponse } from '../../shared/types/pse-api';
+
+/**
+ * Servicio de lista de bancos con CACHÉ DIARIA.
+ *
+ * Requisito PSE #4: GetBankListNF NO debe ejecutarse por cada transacción;
+ * se permite a lo sumo una vez por día. Este servicio cachea el resultado
+ * durante BANK_LIST_CACHE_TTL_MS (24 h por defecto) y solo vuelve a llamar a
+ * PSE cuando la caché expira.
+ *
+ * Requisito PSE #8: la lista se entrega ordenada alfabéticamente por nombre.
+ */
+
+const MOCK_BANKS: BankItem[] = [
+  { financialInstitutionCode: '001', financialInstitutionName: 'BANCO DE BOGOTA' },
+  { financialInstitutionCode: '007', financialInstitutionName: 'BANCO DAVIVIENDA' },
+  { financialInstitutionCode: '006', financialInstitutionName: 'BANCO DE OCCIDENTE' },
+  { financialInstitutionCode: '009', financialInstitutionName: 'BANCO POPULAR' },
+  { financialInstitutionCode: '040', financialInstitutionName: 'BANCO BBVA COLOMBIA' },
+  { financialInstitutionCode: '052', financialInstitutionName: 'BANCO FALABELLA' },
+  { financialInstitutionCode: '058', financialInstitutionName: 'BANCO MUNDO MUJER' },
+  { financialInstitutionCode: '060', financialInstitutionName: 'BANCO PICHINCHA' },
+  { financialInstitutionCode: '062', financialInstitutionName: 'BANCO W' },
+  { financialInstitutionCode: '063', financialInstitutionName: 'BANCO SERFINANZA' },
+  { financialInstitutionCode: '066', financialInstitutionName: 'BANCO COOPERATIVO COOPCENTRAL' },
+  { financialInstitutionCode: '067', financialInstitutionName: 'BANCO CAJA SOCIAL' },
+  { financialInstitutionCode: '069', financialInstitutionName: 'BANCO AV VILLAS' },
+  { financialInstitutionCode: '112', financialInstitutionName: 'BANCO PRODUBANCO' },
+  { financialInstitutionCode: '120', financialInstitutionName: 'BANCO ITAU' }
+];
+
+// TTL de la caché exitosa (24 h por defecto).
+const CACHE_TTL_MS: number = parseInt(process.env.BANK_LIST_CACHE_TTL_MS || '86400000', 10);
+// TTL corto cuando se sirve mock por caída de PSE (para reintentar pronto).
+const FALLBACK_TTL_MS: number = parseInt(process.env.BANK_LIST_FALLBACK_TTL_MS || '300000', 10);
+
+interface BankCache {
+  banks: BankItem[];
+  expiresAt: number;
+  source: 'pse' | 'mock';
+}
+
+let cache: BankCache | null = null;
+
+function sortAlphabetical(banks: BankItem[]): BankItem[] {
+  return [...banks].sort((a, b) =>
+    a.financialInstitutionName.localeCompare(b.financialInstitutionName, 'es', { sensitivity: 'base' })
+  );
+}
+
+export default {
+  /**
+   * Devuelve la lista de bancos ordenada. Usa caché diaria; solo llama a
+   * GetBankListNF cuando la caché expiró.
+   */
+  async getBanks(): Promise<{ banks: BankItem[]; source: 'pse' | 'mock'; cached: boolean }> {
+    const now = Date.now();
+
+    if (cache && now < cache.expiresAt) {
+      return { banks: cache.banks, source: cache.source, cached: true };
+    }
+
+    try {
+      const response: PSEApiResponse = await pseService.getBankList();
+      const raw = (response.banks || []) as BankItem[];
+
+      if (!raw.length) {
+        throw new Error('GetBankListNF devolvió una lista vacía');
+      }
+
+      const banks = sortAlphabetical(raw);
+      cache = { banks, expiresAt: now + CACHE_TTL_MS, source: 'pse' };
+      logger.info(`Lista de bancos actualizada desde PSE (${banks.length}). Próxima recarga en ${Math.round(CACHE_TTL_MS / 3600000)} h`);
+      return { banks, source: 'pse', cached: false };
+    } catch (error) {
+      logger.warn('PSE API no disponible para GetBankListNF, usando bancos mock:', (error as Error).message);
+      const banks = sortAlphabetical(MOCK_BANKS);
+      // Se cachea el mock por poco tiempo para no golpear PSE en cada request
+      // mientras esté degradado, pero reintentando pronto.
+      cache = { banks, expiresAt: now + FALLBACK_TTL_MS, source: 'mock' };
+      return { banks, source: 'mock', cached: false };
+    }
+  },
+
+  /** Fuerza el refresco en la siguiente llamada (p. ej. tarea programada diaria). */
+  invalidate(): void {
+    cache = null;
+  }
+};
+```
+
+### 9.9 `backend/services/recaptcha.service.ts`
 
 ```typescript
 import axios from 'axios';
@@ -1687,7 +1802,7 @@ class RecaptchaService {
 export default new RecaptchaService();
 ```
 
-### 9.9 `backend/services/doublePayment.service.ts`
+### 9.10 `backend/services/doublePayment.service.ts`
 
 ```typescript
 import config from '../config/pse.config';
@@ -1744,11 +1859,12 @@ class DoublePaymentService {
 export default new DoublePaymentService();
 ```
 
-### 9.10 `backend/controllers/pse.controller.ts`
+### 9.11 `backend/controllers/pse.controller.ts`
 
 ```typescript
 import { Request, Response } from 'express';
 import pseService from '../services/pse.service';
+import bankListService from '../services/bankList.service';
 import { FINAL_STATES } from '../config/constants';
 import doublePaymentService from '../services/doublePayment.service';
 import { getPSEErrorMessage } from '../utils/errorMessages';
@@ -1756,47 +1872,19 @@ import logger from '../utils/logger';
 import { CreateTransactionInput } from '../validation/schemas';
 import { PSEApiResponse } from '../../shared/types/pse-api';
 
-const MOCK_BANKS = [
-  { financialInstitutionCode: '001', financialInstitutionName: 'BANCO DE BOGOTA' },
-  { financialInstitutionCode: '007', financialInstitutionName: 'BANCO DAVIVIENDA' },
-  { financialInstitutionCode: '006', financialInstitutionName: 'BANCO DE OCCIDENTE' },
-  { financialInstitutionCode: '009', financialInstitutionName: 'BANCO POPULAR' },
-  { financialInstitutionCode: '012', financialInstitutionName: 'BANCO COLPATRA' },
-  { financialInstitutionCode: '013', financialInstitutionName: 'BANCO COLMENA' },
-  { financialInstitutionCode: '023', financialInstitutionName: 'BANCO CONTINENTAL' },
-  { financialInstitutionCode: '032', financialInstitutionName: 'BANCO SANTANDER' },
-  { financialInstitutionCode: '040', financialInstitutionName: 'BANCO BBVA COLOMBIA' },
-  { financialInstitutionCode: '052', financialInstitutionName: 'BANCO FALABELLA' },
-  { financialInstitutionCode: '058', financialInstitutionName: 'BANCO MUNDO MUJER' },
-  { financialInstitutionCode: '059', financialInstitutionName: 'BANCO VILLAS' },
-  { financialInstitutionCode: '060', financialInstitutionName: 'BANCO PICHINCHA' },
-  { financialInstitutionCode: '061', financialInstitutionName: 'BANCO PROMERICA' },
-  { financialInstitutionCode: '062', financialInstitutionName: 'BANCO W' },
-  { financialInstitutionCode: '063', financialInstitutionName: 'BANCO SERFINANZA' },
-  { financialInstitutionCode: '065', financialInstitutionName: 'BANCO BLUE' },
-  { financialInstitutionCode: '066', financialInstitutionName: 'BANCO COOPERATIVO COOPCENTRAL' },
-  { financialInstitutionCode: '067', financialInstitutionName: 'BANCO Caja Social' },
-  { financialInstitutionCode: '069', financialInstitutionName: 'BANCO AV VILLAS' },
-  { financialInstitutionCode: '070', financialInstitutionName: 'BANCO DE CREDITO' },
-  { financialInstitutionCode: '107', financialInstitutionName: 'BANCO CAJA SOCIAL' },
-  { financialInstitutionCode: '112', financialInstitutionName: 'BANCO PRODUBANCO' },
-  { financialInstitutionCode: '120', financialInstitutionName: 'BANCO ITAU' }
-];
 
 class PSEController {
   async getBankList(req: Request, res: Response): Promise<void> {
     try {
-      let banks: PSEApiResponse;
-      try {
-        banks = await pseService.getBankList();
-      } catch (error) {
-        logger.warn('PSE API no disponible, usando bancos mock');
-        banks = { returnCode: 'SUCCESS', banks: MOCK_BANKS } as unknown as PSEApiResponse;
-      }
+      // Requisito PSE #4: la lista se sirve desde caché diaria (GetBankListNF
+      // se llama a lo sumo una vez al día, no por transacción).
+      // Requisito PSE #8: ordenada alfabéticamente.
+      const { banks, source, cached } = await bankListService.getBanks();
       res.json({
         success: true,
-        data: banks.banks || MOCK_BANKS,
-        message: 'Lista de bancos obtenida exitosamente'
+        data: banks,
+        message: 'Lista de bancos obtenida exitosamente',
+        meta: { source, cached }
       });
     } catch (error) {
       logger.error('Error en getBankList:', (error as Error).message);
@@ -1999,7 +2087,7 @@ class PSEController {
 export default new PSEController();
 ```
 
-### 9.11 `backend/routes/pse.routes.ts`
+### 9.12 `backend/routes/pse.routes.ts`
 
 ```typescript
 import { Router, Request, Response } from 'express';
@@ -2081,7 +2169,7 @@ router.post('/transaction/finalize',
 export default router;
 ```
 
-### 9.12 `backend/middleware/error.middleware.ts`
+### 9.13 `backend/middleware/error.middleware.ts`
 
 ```typescript
 import { Request, Response, NextFunction } from 'express';
@@ -2142,7 +2230,7 @@ export const notFoundHandler = (req: Request, res: Response): void => {
 };
 ```
 
-### 9.13 `backend/middleware/rateLimit.middleware.ts`
+### 9.14 `backend/middleware/rateLimit.middleware.ts`
 
 ```typescript
 import { Request, Response, NextFunction } from 'express';
@@ -2174,7 +2262,7 @@ export const globalLimiter = rateLimit({
 });
 ```
 
-### 9.14 `backend/middleware/recaptcha.middleware.ts`
+### 9.15 `backend/middleware/recaptcha.middleware.ts`
 
 ```typescript
 import { Request, Response, NextFunction } from 'express';
@@ -2211,7 +2299,7 @@ export const verifyRecaptcha = (action: string = RECAPTCHA_ACTIONS.PAYMENT) => {
 };
 ```
 
-### 9.15 `backend/middleware/requestId.middleware.ts`
+### 9.16 `backend/middleware/requestId.middleware.ts`
 
 ```typescript
 import { Request, Response, NextFunction } from 'express';
@@ -2232,7 +2320,7 @@ export const requestIdMiddleware = (req: Request, res: Response, next: NextFunct
 };
 ```
 
-### 9.16 `backend/middleware/sanitize.middleware.ts`
+### 9.17 `backend/middleware/sanitize.middleware.ts`
 
 ```typescript
 import { Request, Response, NextFunction } from 'express';
@@ -2296,7 +2384,7 @@ export const checkForbiddenChars = (req: Request, res: Response, next: NextFunct
 };
 ```
 
-### 9.17 `backend/middleware/securityHeaders.middleware.ts`
+### 9.18 `backend/middleware/securityHeaders.middleware.ts`
 
 ```typescript
 import { Request, Response, NextFunction } from 'express';
@@ -2376,7 +2464,7 @@ export const validateOrigin = (
 };
 ```
 
-### 9.18 `backend/models/transaction.model.ts`
+### 9.19 `backend/models/transaction.model.ts`
 
 ```typescript
 import crypto from 'crypto';
@@ -2448,7 +2536,7 @@ class TransactionModel {
 export default new TransactionModel();
 ```
 
-### 9.19 `backend/validation/middleware.ts`
+### 9.20 `backend/validation/middleware.ts`
 
 ```typescript
 import { Request, Response, NextFunction } from 'express';
@@ -2498,7 +2586,7 @@ export const validateParams = (schema: ZodSchema) => {
 };
 ```
 
-### 9.20 `backend/validation/schemas.ts`
+### 9.21 `backend/validation/schemas.ts`
 
 ```typescript
 import { z } from 'zod';
@@ -2571,7 +2659,7 @@ export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
 export type FinalizeTransactionInput = z.infer<typeof finalizeTransactionSchema>;
 ```
 
-### 9.21 `backend/errors/index.ts`
+### 9.22 `backend/errors/index.ts`
 
 ```typescript
 export class AppError extends Error {
@@ -2642,7 +2730,7 @@ export class EncryptionError extends AppError {
 }
 ```
 
-### 9.22 `backend/utils/causalRejection.ts`
+### 9.23 `backend/utils/causalRejection.ts`
 
 ```typescript
 export const CAUSAL_REJECTION: Record<string, string> = {
@@ -2683,7 +2771,7 @@ export function getCausalMessage(code: string): string {
 }
 ```
 
-### 9.23 `backend/utils/dates.ts`
+### 9.24 `backend/utils/dates.ts`
 
 ```typescript
 export const COLOMBIA_OFFSET_HOURS: number = -5;
@@ -2710,7 +2798,7 @@ export function nowColombiaISO(): string {
 }
 ```
 
-### 9.24 `backend/utils/errorMessages.ts`
+### 9.25 `backend/utils/errorMessages.ts`
 
 ```typescript
 import { TransactionState } from '../../shared/types/transaction';
@@ -2727,29 +2815,73 @@ interface ValidationErrors {
   FAIL_DOUBLEPAYMENT: (state: string, ticketId: string | number, cus: string) => string;
 }
 
+/**
+ * Mensaje genérico exigido por PSE (Requisito #7) para los errores de creación
+ * de transacción. Todos los códigos de GENERIC_CREATE_ERRORS —y cualquier código
+ * desconocido— se resuelven a este texto.
+ */
+const GENERIC_CREATE_ERROR =
+  'No se pudo crear la transaccion, por favor intente mas tarde o comuniquese con la empresa';
+
+// Requisito PSE #7: estos códigos deben mostrar SIEMPRE el mensaje genérico.
+const GENERIC_CREATE_ERRORS: string[] = [
+  'FAIL_ENTITYNOTEXISTSORDISABLED',
+  'FAIL_BANKNOTEXISTSORDISABLED',
+  'FAIL_SERVICENOTEXISTSORNOTCONFIGURED',
+  'FAIL_INVALIDAMOUNTORVATAMOUNT',
+  'FAIL_INVALIDAMOUNT',
+  'FAIL_INVALIDSOLICITDATE',
+  'FAIL_CANNOTGETCURRENTCYCLE',
+  'FAIL_ACCESSDENIED',
+  'FAIL_TRANSACTIONNOTALLOWED',
+  'FAIL_INVALIDPARAMETERS',
+  'FAIL_GENERICERROR',
+  // Otros códigos de fallo de creación que también deben ir al genérico
+  'FAIL_NOTCONFIRMEDBYBANK',
+  'FAIL_INCONSISTENTFECHA',
+  'FAIL_INVALIDBANKPROCESSINGDATE'
+];
+
 export const PSE_ERROR_MESSAGES: PSEErrorMessages = {
   SUCCESS: 'Transaccion procesada correctamente.',
-  FAIL_ENTITYNOTEXISTSORDISABLED: 'No se pudo crear la transaccion, por favor intente mas tarde o comuniquese con la empresa',
-  FAIL_BANKNOTEXISTSORDISABLED: 'El banco seleccionado no esta disponible. Por favor seleccione otro.',
-  FAIL_SERVICENOTEXISTSORNOTCONFIGURED: 'No se pudo crear la transaccion, por favor intente mas tarde o comuniquese con la empresa',
-  FAIL_INVALIDAMOUNTORVATAMOUNT: 'El monto ingresado no es valido. Por favor verifique el valor.',
-  FAIL_INVALIDSOLICITDATE: 'La fecha de solicitud no es valida. Por favor recargue la pagina.',
-  FAIL_CANNOTGETCURRENTCYCLE: 'No se pudo crear la transaccion, por favor intente mas tarde o comuniquese con la empresa',
-  FAIL_ACCESSDENIED: 'Acceso denegado. Por favor contacte a la empresa.',
-  FAIL_EXCEEDEDLIMIT: 'El monto de la transaccion excede los limites establecidos en PSE para la empresa, por favor comuniquese con nuestras lineas de atencion al cliente al telefono (605) 333-XXXX o al correo electronico facturacion@juntaatlantico.co',
-  FAIL_TRANSACTIONNOTALLOWED: 'La transaccion no esta permitida en este momento. Por favor intente mas tarde.',
-  FAIL_INVALIDPARAMETERS: 'No se pudo crear la transaccion, por favor intente mas tarde o comuniquese con la empresa',
-  FAIL_GENERICERROR: 'No se pudo crear la transaccion, por favor intente mas tarde o comuniquese con la empresa',
-  FAIL_DISABLEDUSEREMAIL: 'El correo electronico ingresado presenta restricciones. Por favor verifique o use otro correo de contacto.',
-  FAIL_ERRORINCREDITS: 'Ocurrio un error al procesar los creditos. Por favor intente mas tarde.',
-  FAIL_INVALIDTRAZABILITYCODE: 'La transaccion aun se esta procesando. Por favor espere unos minutos.',
-  FAIL_BANKUNREACHEABLE: 'La entidad financiera no puede ser contactada para iniciar la transaccion, por favor seleccione otra o intente mas tarde',
-  FAIL_TIMEOUT: 'El tiempo de espera ha expirado. Por favor intente mas tarde.',
-  FAIL_NOTCONFIRMEDBYBANK: 'No se pudo crear la transaccion, por favor intente mas tarde o comuniquese con la empresa',
-  FAIL_INVALIDSTATE: 'La transaccion no puede ser procesada en este momento. Por favor intente mas tarde.',
-  FAIL_INCONSISTENTFECHA: 'No se pudo crear la transaccion, por favor intente mas tarde o comuniquese con la empresa',
-  FAIL_INVALIDBANKPROCESSINGDATE: 'No se pudo crear la transaccion, por favor intente mas tarde o comuniquese con la empresa',
-  FAIL_INVALIDAUTHORIZEDAMOUNT: 'El valor devuelto por la Entidad Financiera es diferente al valor enviado. Por favor intente mas tarde.'
+
+  // Requisito PSE #6: texto claro; las opciones de contacto se muestran en el
+  // frontend (bloque de contacto). Se mantiene el core del texto exigido.
+  FAIL_EXCEEDEDLIMIT:
+    'El monto de la transaccion excede los limites establecidos en PSE para la empresa, ' +
+    'por favor comuniquese con la empresa',
+
+  // Requisito PSE #7: todos estos comparten el mensaje genérico
+  FAIL_ENTITYNOTEXISTSORDISABLED: GENERIC_CREATE_ERROR,
+  FAIL_BANKNOTEXISTSORDISABLED: GENERIC_CREATE_ERROR,
+  FAIL_SERVICENOTEXISTSORNOTCONFIGURED: GENERIC_CREATE_ERROR,
+  FAIL_INVALIDAMOUNTORVATAMOUNT: GENERIC_CREATE_ERROR,
+  FAIL_INVALIDAMOUNT: GENERIC_CREATE_ERROR,
+  FAIL_INVALIDSOLICITDATE: GENERIC_CREATE_ERROR,
+  FAIL_CANNOTGETCURRENTCYCLE: GENERIC_CREATE_ERROR,
+  FAIL_ACCESSDENIED: GENERIC_CREATE_ERROR,
+  FAIL_TRANSACTIONNOTALLOWED: GENERIC_CREATE_ERROR,
+  FAIL_INVALIDPARAMETERS: GENERIC_CREATE_ERROR,
+  FAIL_GENERICERROR: GENERIC_CREATE_ERROR,
+  FAIL_NOTCONFIRMEDBYBANK: GENERIC_CREATE_ERROR,
+  FAIL_INCONSISTENTFECHA: GENERIC_CREATE_ERROR,
+  FAIL_INVALIDBANKPROCESSINGDATE: GENERIC_CREATE_ERROR,
+
+  // Códigos NO listados en el #7: mensajes recomendados (Anexo del doc)
+  FAIL_DISABLEDUSEREMAIL:
+    'El correo electronico ingresado presenta restricciones. Por favor verifique o use otro correo de contacto.',
+  FAIL_ERRORINCREDITS:
+    'Ocurrio un error al procesar los creditos. Por favor intente mas tarde.',
+  FAIL_INVALIDTRAZABILITYCODE:
+    'La transaccion aun se esta procesando. Por favor espere unos minutos.',
+  FAIL_BANKUNREACHEABLE:
+    'La entidad financiera no puede ser contactada para iniciar la transaccion, por favor seleccione otra o intente mas tarde',
+  FAIL_TIMEOUT:
+    'El tiempo de espera ha expirado. Por favor intente mas tarde.',
+  FAIL_INVALIDSTATE:
+    'La transaccion no puede ser procesada en este momento. Por favor intente mas tarde.',
+  FAIL_INVALIDAUTHORIZEDAMOUNT:
+    'El valor devuelto por la Entidad Financiera es diferente al valor enviado. Por favor intente mas tarde.'
 };
 
 export const VALIDATION_ERRORS: ValidationErrors = {
@@ -2770,7 +2902,10 @@ export const VALIDATION_ERRORS: ValidationErrors = {
 };
 
 export function getPSEErrorMessage(code: string): string {
-  return PSE_ERROR_MESSAGES[code] || PSE_ERROR_MESSAGES.FAIL_GENERICERROR;
+  if (GENERIC_CREATE_ERRORS.includes(code)) {
+    return GENERIC_CREATE_ERROR;
+  }
+  return PSE_ERROR_MESSAGES[code] || GENERIC_CREATE_ERROR;
 }
 
 export function getDoublePaymentMessage(state: string, ticketId: string | number, cus: string): string {
@@ -2778,7 +2913,7 @@ export function getDoublePaymentMessage(state: string, ticketId: string | number
 }
 ```
 
-### 9.25 `backend/utils/logger.ts`
+### 9.26 `backend/utils/logger.ts`
 
 ```typescript
 import winston from 'winston';
@@ -2817,7 +2952,7 @@ const logger: winston.Logger = winston.createLogger({
 export default logger;
 ```
 
-### 9.26 `backend/utils/paymentMode.ts`
+### 9.27 `backend/utils/paymentMode.ts`
 
 ```typescript
 export const PAYMENT_MODE_LABELS: Record<number, string> = {
@@ -2845,7 +2980,7 @@ export function getPaymentOriginLabel(code: number): string {
 }
 ```
 
-### 9.27 `backend/utils/validators.ts`
+### 9.28 `backend/utils/validators.ts`
 
 ```typescript
 import { UserType, IdentificationType, PaymentData } from '../../shared/types/payment';
@@ -2917,7 +3052,7 @@ export class PaymentValidator {
 }
 ```
 
-### 9.28 `backend/server.ts`
+### 9.29 `backend/server.ts`
 
 ```typescript
 import dotenv from 'dotenv';
@@ -3009,6 +3144,23 @@ if (require.main === module) {
 }
 
 export default app;
+```
+
+### 9.30 `backend/tsconfig.build.json`
+
+```json
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "exclude": [
+    "node_modules",
+    "dist",
+    "tests",
+    "**/*.test.ts"
+  ]
+}
 ```
 
 ---
@@ -3129,6 +3281,12 @@ interface ImportMetaEnv {
   readonly VITE_RECAPTCHA_SITE_KEY: string
   readonly VITE_POLLING_INTERVAL_MS: string
   readonly VITE_MAX_POLLING_ATTEMPTS: string
+  // Datos del comercio para el comprobante (Requisito PSE #11)
+  readonly VITE_COMPANY_NIT: string
+  readonly VITE_COMPANY_NAME: string
+  // Contacto para estados PENDING / error (Requisitos PSE #6, #7, #11)
+  readonly VITE_CONTACT_PHONE: string
+  readonly VITE_CONTACT_EMAIL: string
 }
 
 interface ImportMeta {
@@ -3644,15 +3802,44 @@ interface PSEErrorMessages {
   [key: string]: string;
 }
 
+/**
+ * Mensaje genérico exigido por PSE (Requisito #7) para los errores de creación
+ * de transacción. Todos los códigos de GENERIC_CREATE_ERRORS —y cualquier código
+ * desconocido— se resuelven a este texto.
+ */
+const GENERIC_CREATE_ERROR =
+  'No se pudo crear la transaccion, por favor intente mas tarde o comuniquese con la empresa.';
+
+// Requisito PSE #7: estos códigos deben mostrar SIEMPRE el mensaje genérico.
+const GENERIC_CREATE_ERRORS: string[] = [
+  'FAIL_ENTITYNOTEXISTSORDISABLED',
+  'FAIL_BANKNOTEXISTSORDISABLED',
+  'FAIL_SERVICENOTEXISTSORNOTCONFIGURED',
+  'FAIL_INVALIDAMOUNTORVATAMOUNT',
+  'FAIL_INVALIDAMOUNT',
+  'FAIL_INVALIDSOLICITDATE',
+  'FAIL_CANNOTGETCURRENTCYCLE',
+  'FAIL_ACCESSDENIED',
+  'FAIL_TRANSACTIONNOTALLOWED',
+  'FAIL_INVALIDPARAMETERS',
+  'FAIL_GENERICERROR'
+];
+
 export const PSE_ERROR_MESSAGES: PSEErrorMessages = {
   SUCCESS: 'Transaccion procesada correctamente.',
+
+  // Requisito PSE #6: texto claro + se ofrecen opciones de contacto (bloque aparte).
   FAIL_EXCEEDEDLIMIT:
     'El monto de la transaccion excede los limites establecidos en PSE para la empresa, ' +
-    'por favor comuniquese con nuestras lineas de atencion al cliente al telefono ' +
-    '(605) 333-XXXX o al correo electronico facturacion@juntaatlantico.co',
+    'por favor comuniquese con la empresa.',
+
+  // Mensaje genérico (Requisito #7)
+  FAIL_GENERICERROR: GENERIC_CREATE_ERROR,
+
+  // Mensajes recomendados (Anexo doc) para códigos NO listados en el #7
   FAIL_BANKUNREACHEABLE:
     'La entidad financiera no puede ser contactada para iniciar la transaccion, ' +
-    'por favor seleccione otra o intente mas tarde',
+    'por favor seleccione otra o intente mas tarde.',
   FAIL_DISABLEDUSEREMAIL:
     'El correo electronico ingresado presenta restricciones. ' +
     'Por favor verifique o use otro correo de contacto.',
@@ -3660,22 +3847,14 @@ export const PSE_ERROR_MESSAGES: PSEErrorMessages = {
     'Ocurrio un error al procesar los creditos. Por favor intente mas tarde.',
   FAIL_INVALIDTRAZABILITYCODE:
     'La transaccion aun se esta procesando. Por favor espere unos minutos.',
-  FAIL_BANKNOTEXISTSORDISABLED:
-    'El banco seleccionado no esta disponible. Por favor seleccione otro.',
-  FAIL_INVALIDAMOUNT:
-    'El monto ingresado no es valido. Por favor verifique el valor.',
-  FAIL_INVALIDSOLICITDATE:
-    'La fecha de solicitud no es valida. Por favor recargue la pagina.',
-  FAIL_TRANSACTIONNOTALLOWED:
-    'La transaccion no esta permitida en este momento. Por favor intente mas tarde.',
   FAIL_TIMEOUT:
     'El tiempo de espera ha expirado. Por favor intente mas tarde.',
-  FAIL_GENERICERROR:
-    'No se pudo crear la transaccion, por favor intente mas tarde o comuniquese con la empresa.',
-  FAIL_ACCESSDENIED:
-    'Acceso denegado. Por favor contacte a la empresa.',
+
+  // Errores del lado cliente (no son respuestas de creación PSE)
   FAIL_RECAPTCHA:
     'No se pudo verificar que no eres un robot. Por favor intenta de nuevo.',
+  RECAPTCHA_UNAVAILABLE:
+    'No se pudo inicializar la verificacion de seguridad. Recarga la pagina e intenta de nuevo.',
   FAIL_RATE_LIMIT:
     'Demasiadas solicitudes. Por favor intente en un minuto.',
   FAIL_DOUBLEPAYMENT: 'Verifique el estado de su pago antes de iniciar uno nuevo.',
@@ -3683,7 +3862,26 @@ export const PSE_ERROR_MESSAGES: PSEErrorMessages = {
 };
 
 export function getErrorMessage(code: string): string {
-  return PSE_ERROR_MESSAGES[code] || PSE_ERROR_MESSAGES.FAIL_GENERICERROR;
+  if (GENERIC_CREATE_ERRORS.includes(code)) {
+    return GENERIC_CREATE_ERROR;
+  }
+  return PSE_ERROR_MESSAGES[code] || GENERIC_CREATE_ERROR;
+}
+
+/**
+ * Indica si, para el código dado, se deben ofrecer opciones de contacto con la
+ * empresa (Requisitos PSE #6 y #7). Aplica a EXCEEDEDLIMIT, a los errores de
+ * creación de transacción y a cualquier código desconocido; NO a los errores de
+ * cliente (validación, reCAPTCHA, rate limit, doble pago).
+ */
+export function shouldOfferContact(code: string): boolean {
+  const clientSide = [
+    'FAIL_VALIDATION', 'FAIL_RECAPTCHA', 'RECAPTCHA_UNAVAILABLE',
+    'FAIL_RATE_LIMIT', 'FAIL_DOUBLEPAYMENT'
+  ];
+  if (!code) return false;
+  if (clientSide.includes(code)) return false;
+  return true;
 }
 ```
 
@@ -3841,7 +4039,7 @@ export function validateForm(data: FormData): ValidationErrors {
     <select
       v-else
       :value="modelValue"
-      @change="$emit('update:modelValue', ($event.target as HTMLSelectElement).value)"
+      @change="onSelect(($event.target as HTMLSelectElement).value)"
       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
       :class="{ 'border-red-500': error }"
     >
@@ -3868,13 +4066,23 @@ defineProps<{
   error?: string;
 }>();
 
-defineEmits<{
-  (e: 'update:modelValue', value: string): void;
-}>();
-
 const store = usePaymentStore();
 
 const { loading, banks } = storeToRefs(store);
+
+const emit = defineEmits<{
+  (e: 'update:modelValue', value: string): void;
+}>();
+
+// Emite la selección y persiste el NOMBRE del banco para poder mostrarlo en el
+// comprobante final (Requisito PSE #11), ya que el formulario solo maneja el código.
+function onSelect(code: string): void {
+  emit('update:modelValue', code);
+  const bank = store.banks.find((b) => b.financialInstitutionCode === code);
+  if (bank) {
+    sessionStorage.setItem('pse_bank_name', bank.financialInstitutionName);
+  }
+}
 
 onMounted(() => {
   if (store.banks.length === 0) {
@@ -4170,7 +4378,10 @@ withDefaults(defineProps<{
           </svg>
           {{ loadingMessage }}
         </span>
-        <span v-else>Debito Bancario PSE</span>
+        <span v-else class="inline-flex items-center justify-center gap-2">
+          <img src="/pse-logo.svg" alt="PSE" class="h-5 w-auto bg-white rounded px-1 py-0.5" />
+          <span>Debito Bancario PSE</span>
+        </span>
       </button>
       <button
         type="button"
@@ -4182,12 +4393,24 @@ withDefaults(defineProps<{
       </button>
     </div>
 
+    <!-- Aclaración PSE (Requisito PSE #1) -->
+    <p class="text-xs text-gray-500 text-center pt-2">
+      El pago se realizara de forma segura a traves del Proveedor de Servicios
+      Electronicos PSE. Seras redirigido al portal de PSE para completar la transaccion.
+    </p>
+
     <!-- Errores -->
     <div v-if="error" class="p-4 bg-red-50 border border-red-200 rounded-lg">
       <p class="text-sm text-red-600 flex items-start">
         <span class="mr-2">&#10060;</span>
         <span>{{ error }}</span>
       </p>
+      <!-- Opciones de contacto (Requisitos PSE #6 y #7) -->
+      <div v-if="showContact && hasContact" class="mt-2 pt-2 border-t border-red-100 text-sm text-red-700">
+        Comunicate con nosotros:
+        <span v-if="CONTACT_PHONE"><br />Telefono: {{ CONTACT_PHONE }}</span>
+        <span v-if="CONTACT_EMAIL"><br />Correo: {{ CONTACT_EMAIL }}</span>
+      </div>
     </div>
   </form>
 </template>
@@ -4198,7 +4421,7 @@ import BankList from './BankList.vue';
 import apiService from '../services/api.service';
 import { useReCaptcha } from '../composables/useReCaptcha';
 import { validateForm, validateNoForbiddenChars, ValidationErrors } from '../utils/validators';
-import { getErrorMessage } from '../utils/errorMessages';
+import { getErrorMessage, shouldOfferContact } from '../utils/errorMessages';
 
 interface SuccessPayload {
   trazabilityCode: string;
@@ -4250,6 +4473,10 @@ const emit = defineEmits<{
 
 const loading: Ref<boolean> = ref(false);
 const error: Ref<string> = ref('');
+const showContact: Ref<boolean> = ref(false);
+const CONTACT_PHONE: string = import.meta.env.VITE_CONTACT_PHONE || '';
+const CONTACT_EMAIL: string = import.meta.env.VITE_CONTACT_EMAIL || '';
+const hasContact: boolean = !!(CONTACT_PHONE || CONTACT_EMAIL);
 const fieldErrors: Ref<ValidationErrors> = ref({});
 const loadingMessage: Ref<string> = ref('Procesando...');
 
@@ -4316,6 +4543,7 @@ watch(loading, (newVal: boolean) => {
 
 async function handleSubmit(): Promise<void> {
   error.value = '';
+  showContact.value = false;
   fieldErrors.value = {};
 
   const errors: ValidationErrors = validateForm(form);
@@ -4350,12 +4578,14 @@ async function handleSubmit(): Promise<void> {
     } else {
       const message: string = response.message || getErrorMessage(response.code || '');
       error.value = message;
+      showContact.value = shouldOfferContact(response.code || '');
       emit('error', { code: response.code || '', message });
     }
   } catch (err) {
     const e = err as { message?: string; code?: string };
     const message: string = e.message || getErrorMessage(e.code || '');
     error.value = message;
+    showContact.value = shouldOfferContact(e.code || '');
     emit('error', { code: e.code || '', message });
   } finally {
     loading.value = false;
@@ -4599,80 +4829,114 @@ function handleLoading(_isLoading: boolean): void {
           </button>
         </div>
 
-        <!-- Estado: Aprobado -->
-        <div v-else-if="transactionState === 'OK'" class="py-8">
-          <div class="text-green-600 text-6xl mb-4">&#9989;</div>
-          <h2 class="text-2xl font-bold text-gray-900">Pago aprobado!</h2>
-          <p class="text-gray-600 mt-2">Tu transaccion se ha completado exitosamente</p>
+        <!-- Resultado (4 estados): encabezado por estado + comprobante unico -->
+        <div v-else-if="transactionState" class="py-6">
+          <!-- Encabezado por estado -->
+          <div v-if="transactionState === 'OK'">
+            <div class="text-green-600 text-6xl mb-2">&#9989;</div>
+            <h2 class="text-2xl font-bold text-gray-900">Pago aprobado</h2>
+            <p class="text-gray-600 mt-1">Tu transaccion se ha completado exitosamente.</p>
+          </div>
+          <div v-else-if="transactionState === 'PENDING'">
+            <div class="text-yellow-600 text-6xl mb-2">&#9203;</div>
+            <h2 class="text-xl font-bold text-gray-900">Pago pendiente</h2>
+            <p class="text-gray-600 mt-1">Tu pago esta siendo procesado por tu entidad financiera.</p>
+          </div>
+          <div v-else-if="['NOT_AUTHORIZED', 'FAILED'].includes(transactionState)">
+            <div class="text-red-600 text-6xl mb-2">&#10060;</div>
+            <h2 class="text-xl font-bold text-gray-900">
+              {{ transactionState === 'NOT_AUTHORIZED' ? 'Pago rechazado' : 'Pago fallido' }}
+            </h2>
+            <p class="text-gray-600 mt-1">
+              {{ transactionState === 'NOT_AUTHORIZED'
+                 ? 'La transaccion no fue autorizada por tu banco.'
+                 : 'Ocurrio un error al procesar tu pago.' }}
+            </p>
+          </div>
 
+          <!-- Comprobante de pago (Requisito PSE #11): se muestra en los 4 estados -->
           <div class="mt-6 p-4 bg-gray-50 rounded-lg text-left">
-            <h3 class="font-medium text-gray-700 mb-3">Detalles de la transaccion</h3>
+            <h3 class="font-medium text-gray-700 mb-3">Comprobante de pago</h3>
             <div class="space-y-2 text-sm">
+              <div class="flex justify-between" v-if="receipt.nit">
+                <span class="text-gray-500">NIT:</span>
+                <span>{{ receipt.nit }}</span>
+              </div>
+              <div class="flex justify-between" v-if="receipt.companyName">
+                <span class="text-gray-500">Razon social:</span>
+                <span class="text-right">{{ receipt.companyName }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-gray-500">Estado:</span>
+                <span class="font-semibold">{{ receipt.state }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-gray-500">Banco:</span>
+                <span class="text-right">{{ receipt.bank }}</span>
+              </div>
               <div class="flex justify-between">
                 <span class="text-gray-500">CUS:</span>
-                <span class="font-mono">{{ transaction.trazabilityCode }}</span>
+                <span class="font-mono">{{ receipt.cus }}</span>
               </div>
               <div class="flex justify-between">
                 <span class="text-gray-500">Ticket ID:</span>
-                <span class="font-mono">{{ transaction.ticketId }}</span>
+                <span class="font-mono">{{ receipt.ticketId }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-gray-500">Fecha:</span>
+                <span>{{ receipt.date }}</span>
               </div>
               <div class="flex justify-between">
                 <span class="text-gray-500">Valor:</span>
-                <span class="font-bold">${{ formatCurrency(transaction.transactionValue) }}</span>
+                <span class="font-bold">${{ receipt.amount }}</span>
               </div>
-              <div class="flex justify-between" v-if="transaction.paymentMode">
+              <div class="flex justify-between">
+                <span class="text-gray-500">Descripcion:</span>
+                <span class="text-right">{{ receipt.description }}</span>
+              </div>
+              <div class="flex justify-between" v-if="paymentModeLabel">
                 <span class="text-gray-500">Medio de pago:</span>
                 <span>{{ paymentModeLabel }}</span>
               </div>
-              <div class="flex justify-between" v-if="transaction.paymentOrigin">
+              <div class="flex justify-between" v-if="paymentOriginLabel">
                 <span class="text-gray-500">Tipo:</span>
                 <span>{{ paymentOriginLabel }}</span>
-              </div>
-              <div class="flex justify-between" v-if="transaction.bankProcessDate">
-                <span class="text-gray-500">Fecha:</span>
-                <span>{{ formatDate(transaction.bankProcessDate) }}</span>
               </div>
             </div>
           </div>
 
-          <p class="mt-4 text-xs text-gray-500">
-            Recibiras el soporte de pago en tu correo electronico.
-          </p>
-        </div>
-
-        <!-- Estado: Rechazado / Fallido -->
-        <div v-else-if="['NOT_AUTHORIZED', 'FAILED'].includes(transactionState)" class="py-8">
-          <div class="text-red-600 text-6xl mb-4">&#10060;</div>
-          <h2 class="text-xl font-bold text-gray-900">
-            {{ transactionState === 'NOT_AUTHORIZED' ? 'Pago rechazado' : 'Pago fallido' }}
-          </h2>
-          <p class="text-gray-600 mt-2">
-            {{ transactionState === 'NOT_AUTHORIZED'
-               ? 'La transaccion no fue autorizada por tu banco'
-               : 'Ocurrio un error al procesar tu pago' }}
-          </p>
-
-          <RejectionReason
-            :cause-rejection="detailed?.causeRejection"
-            :rejection-description="detailed?.rejectionDescription"
-            :state-description="detailed?.stateDescription"
-            @retry="goToCheckout"
-          />
-        </div>
-
-        <!-- Estado: Pendiente -->
-        <div v-else-if="transactionState === 'PENDING'" class="py-8">
-          <div class="text-yellow-600 text-6xl mb-4">&#9203;</div>
-          <h2 class="text-xl font-bold text-gray-900">Pago pendiente</h2>
-          <p class="text-gray-600 mt-2">
-            Tu pago esta siendo procesado por tu entidad financiera.
-            Te notificaremos por correo en unos minutos.
-          </p>
-          <div class="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-            <p class="text-sm text-yellow-700">
-              CUS: <span class="font-mono font-bold">{{ transaction.trazabilityCode }}</span>
+          <!-- PENDING: texto literal ACH + contacto (Requisito PSE #11) -->
+          <div v-if="transactionState === 'PENDING'"
+               class="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-left">
+            <p class="text-sm text-yellow-800 font-medium">
+              Por favor verificar si el debito fue realizado en el Banco.
+            </p>
+            <p v-if="hasContact" class="text-sm text-yellow-700 mt-2">
+              Si tienes dudas, comunicate con nosotros:
+              <span v-if="CONTACT_PHONE"><br />Telefono: {{ CONTACT_PHONE }}</span>
+              <span v-if="CONTACT_EMAIL"><br />Correo: {{ CONTACT_EMAIL }}</span>
             </p>
           </div>
+
+          <!-- OK -->
+          <p v-else-if="transactionState === 'OK'" class="mt-4 text-xs text-gray-500">
+            Recibiras el soporte de pago en tu correo electronico.
+          </p>
+
+          <!-- Rechazada / Fallida: causal + contacto -->
+          <template v-else-if="['NOT_AUTHORIZED', 'FAILED'].includes(transactionState)">
+            <RejectionReason
+              :cause-rejection="detailed?.causeRejection"
+              :rejection-description="detailed?.rejectionDescription"
+              :state-description="detailed?.stateDescription"
+              @retry="goToCheckout"
+            />
+            <div v-if="hasContact" class="mt-3 p-3 bg-gray-50 rounded-lg text-left text-sm text-gray-600">
+              Para mayor informacion comunicate con nosotros:
+              <span v-if="CONTACT_PHONE"><br />Telefono: {{ CONTACT_PHONE }}</span>
+              <span v-if="CONTACT_EMAIL"><br />Correo: {{ CONTACT_EMAIL }}</span>
+            </div>
+          </template>
         </div>
 
         <!-- Boton de volver -->
@@ -4706,6 +4970,10 @@ interface TransactionData {
   paymentOrigin?: number;
   bankProcessDate?: string;
   transactionState?: string;
+  financialInstitutionName?: string;
+  paymentDescription?: string;
+  serviceNIT?: string;
+  serviceName?: string;
 }
 
 interface DetailedData {
@@ -4725,6 +4993,17 @@ const transaction: Ref<TransactionData> = ref({});
 const transactionState: Ref<string> = ref('');
 const detailed: Ref<DetailedData | null> = ref(null);
 
+// Datos del comercio y contacto (Requisitos PSE #6, #7, #11)
+const COMPANY_NIT: string = import.meta.env.VITE_COMPANY_NIT || '';
+const COMPANY_NAME: string = import.meta.env.VITE_COMPANY_NAME || 'Junta Atlantico S.A.S.';
+const CONTACT_PHONE: string = import.meta.env.VITE_CONTACT_PHONE || '';
+const CONTACT_EMAIL: string = import.meta.env.VITE_CONTACT_EMAIL || '';
+
+// Snapshot del formulario capturado al montar, ANTES de que clearSession()
+// borre la PII: permite mostrar descripción y banco en el comprobante.
+const formSnapshot = ref<{ description?: string }>({});
+const bankNameSnapshot = ref<string>('');
+
 const { start: startPolling, stop: stopPolling } = usePolling();
 
 const paymentModeLabel: ComputedRef<string> = computed(() =>
@@ -4733,6 +5012,33 @@ const paymentModeLabel: ComputedRef<string> = computed(() =>
 const paymentOriginLabel: ComputedRef<string> = computed(() =>
   transaction.value.paymentOrigin ? getPaymentOriginLabel(transaction.value.paymentOrigin) : ''
 );
+
+const STATE_LABELS: Record<string, string> = {
+  OK: 'Aprobada',
+  PENDING: 'Pendiente',
+  NOT_AUTHORIZED: 'Rechazada',
+  FAILED: 'Fallida'
+};
+const stateLabel: ComputedRef<string> = computed(
+  () => STATE_LABELS[transactionState.value] || transactionState.value || '—'
+);
+
+// Comprobante unificado (Requisito PSE #11): NIT, Razón Social, Estado, Banco,
+// CUS, TicketId, Fecha, Valor y Descripción. Se muestra en los 4 estados.
+const receipt = computed(() => ({
+  nit: COMPANY_NIT || transaction.value.serviceNIT || '',
+  companyName: COMPANY_NAME || transaction.value.serviceName || '',
+  state: stateLabel.value,
+  bank: transaction.value.financialInstitutionName || bankNameSnapshot.value || '—',
+  cus: transaction.value.trazabilityCode || '—',
+  ticketId: transaction.value.ticketId || '—',
+  date: transaction.value.bankProcessDate ? formatDate(transaction.value.bankProcessDate) : '—',
+  amount: typeof transaction.value.transactionValue === 'number'
+    ? formatCurrency(transaction.value.transactionValue) : '—',
+  description: transaction.value.paymentDescription || formSnapshot.value.description || '—'
+}));
+
+const hasContact: ComputedRef<boolean> = computed(() => !!(CONTACT_PHONE || CONTACT_EMAIL));
 
 function formatDate(iso: string): string {
   try {
@@ -4748,6 +5054,7 @@ function clearSession(): void {
   sessionStorage.removeItem('pse_trazability_code');
   sessionStorage.removeItem('pse_ticket_id');
   sessionStorage.removeItem('pse_form_data');
+  sessionStorage.removeItem('pse_bank_name');
 }
 
 // CORRECCION: detener el polling al desmontar la vista. Antes, si el usuario
@@ -4758,6 +5065,18 @@ onUnmounted(() => {
 });
 
 onMounted(async () => {
+  // Capturar datos para el comprobante ANTES de cualquier limpieza de sesión.
+  try {
+    const raw = sessionStorage.getItem('pse_form_data');
+    if (raw) {
+      const fd = JSON.parse(raw) as { description?: string };
+      formSnapshot.value = { description: fd.description };
+    }
+  } catch {
+    /* ignore */
+  }
+  bankNameSnapshot.value = sessionStorage.getItem('pse_bank_name') || '';
+
   let trazabilityCode: string | null = new URLSearchParams(window.location.search).get('trazabilityCode');
   if (!trazabilityCode) {
     trazabilityCode = sessionStorage.getItem('pse_trazability_code');
@@ -5388,5 +5707,73 @@ errores y 37/37 pruebas del backend en verde).
   `token.service.ts` (hoy se envían como JSON).
 - **NIT del beneficiario:** confirmar que `PSE_ENTITY_CODE` sea efectivamente el
   NIT de Junta Atlántico (§7.3). Si difieren, usar una variable separada.
+
+### 16.6 Ajustes de certificación PSE-ACH (14 puntos)
+
+Trabajo realizado para cubrir la lista de verificación de certificación de PSE-ACH.
+
+- **#1 Botón/logo PSE:** el botón muestra el logo de PSE (`/pse-logo.svg`) + texto
+  "Debito Bancario PSE" y una aclaración de que el pago se realiza a través del
+  Proveedor de Servicios Electrónicos PSE. No usa la palabra "tarjeta".
+  *(Verificar que el SVG sea el logo oficial actualizado.)*
+- **#4 GetBankListNF ≤ 1 vez/día:** nuevo `bankList.service.ts` con caché diaria
+  (`BANK_LIST_CACHE_TTL_MS`, 24 h). Ya no se llama a PSE por cada transacción.
+- **#7 Mensajes de error genéricos:** tanto `frontend/src/utils/errorMessages.ts`
+  como `backend/utils/errorMessages.ts` mapean los códigos del requisito #7 (y
+  cualquier código desconocido) al texto genérico "No se pudo crear la
+  transacción…". `FAIL_EXCEEDEDLIMIT` conserva su texto (#6). Se agregó
+  `shouldOfferContact()` y un bloque de contacto en el formulario. Ambos lados
+  quedan alineados, así el texto correcto se muestra venga del backend
+  (`response.message`) o del frontend.
+- **#8 Orden alfabético de bancos:** el `bankList.service.ts` ordena por nombre
+  (`localeCompare`, es). Redirección en la misma pestaña, sin banco por defecto y
+  botón deshabilitado ya estaban implementados.
+- **#11 Comprobante completo:** `PaymentReturn.vue` muestra NIT, Razón Social,
+  Estado, Banco, CUS, TicketId, Fecha, Valor y Descripción en los 4 estados;
+  texto literal + contacto en PENDING; causal + contacto en Rechazada/Fallida.
+  `BankList.vue` persiste el nombre del banco para el comprobante.
+- **#13 Referencias obligatorias:** las 3 referencias de `CreateTransactionPaymentNF`
+  ya no van vacías (mapeo documentado en `pse.service.ts`).
+  *(Confirmar los valores exactos contra el Manual de Buenas Prácticas.)*
+
+Variables `.env` nuevas: `BANK_LIST_CACHE_TTL_MS`, `BANK_LIST_FALLBACK_TTL_MS`
+(backend); `VITE_COMPANY_NIT`, `VITE_COMPANY_NAME`, `VITE_CONTACT_PHONE`,
+`VITE_CONTACT_EMAIL` (frontend).
+
+#### Matriz de cumplimiento
+
+| # | Requisito                                         | Estado                       |
+|---|-----------                                        |--------                       |
+| 1 | Botón/logo PSE; no usar "tarjeta"                 | ✅ (verificar logo oficial)   |
+| 2 | Controles perimetrales de seguridad               | ✅                           |
+| 3 | Validación userType / identificationType          | ✅ |
+| 4 | URLs nuevas + GetBankListNF ≤ 1 vez/día           | ✅ |
+| 5 | GetTransactionInformationNF cada 3 min (PENDING)  | ✅ |
+| 6 | FAIL_EXCEEDEDLIMIT: texto + contacto              | ✅ |
+| 7 | Otros FAIL → mensaje genérico + contacto          | ✅ |
+| 8 | Redirección misma pestaña / orden / botón         | ✅ |
+| 9 | Campos de beneficiario (Desarrollo Independiente) | ✅ (verificar casing/NIT) |
+| 10 | Registro primera vez (términos)                  | ℹ️ Lado PSE |
+| 11 | Comprobante completo (4 estados)                 | ✅ |
+| 12 | Control de pago único (duplicidad)               | ✅ |
+| 13 | 3 referencias según tipo de entidad              | ⚠️ Confirmar valores con manual |
+| 14 | Flujo PSE Avanza recurrente + OTP Banka          | ⚠️ Prueba con credenciales |
+
+### 16.7 Configuración de TypeScript: editor vs build
+
+Para que el editor reconozca los tipos de Jest (`describe`/`test`/`expect`) en
+los archivos `*.test.ts` sin que los tests terminen en el build de producción,
+se separó la configuración:
+
+- **`backend/tsconfig.json`** (editor + `ts-jest` + `typecheck`): incluye los
+  tests y declara `"types": ["node", "jest"]`.
+- **`backend/tsconfig.build.json`** (NUEVO, usado por `npm run build`): extiende
+  el anterior pero **excluye** `tests` y `**/*.test.ts`, y usa
+  `"types": ["node"]` para que el código de producción no dependa de los
+  globales de Jest.
+- `package.json`: el script `build` ahora es `tsc -p tsconfig.build.json`.
+
+Tras aplicar esto, reiniciar el servidor de TypeScript del editor
+("TypeScript: Restart TS Server") para que tome la nueva configuración.
 
 ---

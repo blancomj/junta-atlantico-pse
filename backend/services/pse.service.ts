@@ -93,9 +93,16 @@ class PSEService {
       userType: paymentData.userType,
       soliciteDate: nowColombiaISO(),
       paymentDescription: paymentData.description || 'Pago en Junta Atlantico',
+      // Requisito PSE #13: las 3 referencias son OBLIGATORIAS y deben corresponder
+      // a las requeridas para el tipo de vinculacion (Desarrollo Independiente)
+      // segun el Manual de Buenas Practicas. Los valores por defecto de abajo son
+      // un mapeo sensato y NO vacio; CONFIRMAR contra el manual antes de certificar.
+      //   referenceNumber1 -> identificacion del pagador
+      //   referenceNumber2 -> ticketId (referencia unica de la transaccion)
+      //   referenceNumber3 -> codigo de servicio
       referenceNumber1: paymentData.reference1 || paymentData.identificationNumber || '',
-      referenceNumber2: paymentData.reference2 || '',
-      referenceNumber3: paymentData.reference3 || '',
+      referenceNumber2: paymentData.reference2 || String(paymentData.ticketId || '') || 'N/A',
+      referenceNumber3: paymentData.reference3 || this.serviceCode || paymentData.serviceCode || 'N/A',
       identificationType: paymentData.identificationType,
       identificationNumber: paymentData.identificationNumber,
       fullName: paymentData.fullName,

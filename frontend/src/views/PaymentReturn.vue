@@ -24,80 +24,114 @@
           </button>
         </div>
 
-        <!-- Estado: Aprobado -->
-        <div v-else-if="transactionState === 'OK'" class="py-8">
-          <div class="text-green-600 text-6xl mb-4">&#9989;</div>
-          <h2 class="text-2xl font-bold text-gray-900">Pago aprobado!</h2>
-          <p class="text-gray-600 mt-2">Tu transaccion se ha completado exitosamente</p>
+        <!-- Resultado (4 estados): encabezado por estado + comprobante unico -->
+        <div v-else-if="transactionState" class="py-6">
+          <!-- Encabezado por estado -->
+          <div v-if="transactionState === 'OK'">
+            <div class="text-green-600 text-6xl mb-2">&#9989;</div>
+            <h2 class="text-2xl font-bold text-gray-900">Pago aprobado</h2>
+            <p class="text-gray-600 mt-1">Tu transaccion se ha completado exitosamente.</p>
+          </div>
+          <div v-else-if="transactionState === 'PENDING'">
+            <div class="text-yellow-600 text-6xl mb-2">&#9203;</div>
+            <h2 class="text-xl font-bold text-gray-900">Pago pendiente</h2>
+            <p class="text-gray-600 mt-1">Tu pago esta siendo procesado por tu entidad financiera.</p>
+          </div>
+          <div v-else-if="['NOT_AUTHORIZED', 'FAILED'].includes(transactionState)">
+            <div class="text-red-600 text-6xl mb-2">&#10060;</div>
+            <h2 class="text-xl font-bold text-gray-900">
+              {{ transactionState === 'NOT_AUTHORIZED' ? 'Pago rechazado' : 'Pago fallido' }}
+            </h2>
+            <p class="text-gray-600 mt-1">
+              {{ transactionState === 'NOT_AUTHORIZED'
+                 ? 'La transaccion no fue autorizada por tu banco.'
+                 : 'Ocurrio un error al procesar tu pago.' }}
+            </p>
+          </div>
 
+          <!-- Comprobante de pago (Requisito PSE #11): se muestra en los 4 estados -->
           <div class="mt-6 p-4 bg-gray-50 rounded-lg text-left">
-            <h3 class="font-medium text-gray-700 mb-3">Detalles de la transaccion</h3>
+            <h3 class="font-medium text-gray-700 mb-3">Comprobante de pago</h3>
             <div class="space-y-2 text-sm">
+              <div class="flex justify-between" v-if="receipt.nit">
+                <span class="text-gray-500">NIT:</span>
+                <span>{{ receipt.nit }}</span>
+              </div>
+              <div class="flex justify-between" v-if="receipt.companyName">
+                <span class="text-gray-500">Razon social:</span>
+                <span class="text-right">{{ receipt.companyName }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-gray-500">Estado:</span>
+                <span class="font-semibold">{{ receipt.state }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-gray-500">Banco:</span>
+                <span class="text-right">{{ receipt.bank }}</span>
+              </div>
               <div class="flex justify-between">
                 <span class="text-gray-500">CUS:</span>
-                <span class="font-mono">{{ transaction.trazabilityCode }}</span>
+                <span class="font-mono">{{ receipt.cus }}</span>
               </div>
               <div class="flex justify-between">
                 <span class="text-gray-500">Ticket ID:</span>
-                <span class="font-mono">{{ transaction.ticketId }}</span>
+                <span class="font-mono">{{ receipt.ticketId }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-gray-500">Fecha:</span>
+                <span>{{ receipt.date }}</span>
               </div>
               <div class="flex justify-between">
                 <span class="text-gray-500">Valor:</span>
-                <span class="font-bold">${{ formatCurrency(transaction.transactionValue) }}</span>
+                <span class="font-bold">${{ receipt.amount }}</span>
               </div>
-              <div class="flex justify-between" v-if="transaction.paymentMode">
+              <div class="flex justify-between">
+                <span class="text-gray-500">Descripcion:</span>
+                <span class="text-right">{{ receipt.description }}</span>
+              </div>
+              <div class="flex justify-between" v-if="paymentModeLabel">
                 <span class="text-gray-500">Medio de pago:</span>
                 <span>{{ paymentModeLabel }}</span>
               </div>
-              <div class="flex justify-between" v-if="transaction.paymentOrigin">
+              <div class="flex justify-between" v-if="paymentOriginLabel">
                 <span class="text-gray-500">Tipo:</span>
                 <span>{{ paymentOriginLabel }}</span>
-              </div>
-              <div class="flex justify-between" v-if="transaction.bankProcessDate">
-                <span class="text-gray-500">Fecha:</span>
-                <span>{{ formatDate(transaction.bankProcessDate) }}</span>
               </div>
             </div>
           </div>
 
-          <p class="mt-4 text-xs text-gray-500">
-            Recibiras el soporte de pago en tu correo electronico.
-          </p>
-        </div>
-
-        <!-- Estado: Rechazado / Fallido -->
-        <div v-else-if="['NOT_AUTHORIZED', 'FAILED'].includes(transactionState)" class="py-8">
-          <div class="text-red-600 text-6xl mb-4">&#10060;</div>
-          <h2 class="text-xl font-bold text-gray-900">
-            {{ transactionState === 'NOT_AUTHORIZED' ? 'Pago rechazado' : 'Pago fallido' }}
-          </h2>
-          <p class="text-gray-600 mt-2">
-            {{ transactionState === 'NOT_AUTHORIZED'
-               ? 'La transaccion no fue autorizada por tu banco'
-               : 'Ocurrio un error al procesar tu pago' }}
-          </p>
-
-          <RejectionReason
-            :cause-rejection="detailed?.causeRejection"
-            :rejection-description="detailed?.rejectionDescription"
-            :state-description="detailed?.stateDescription"
-            @retry="goToCheckout"
-          />
-        </div>
-
-        <!-- Estado: Pendiente -->
-        <div v-else-if="transactionState === 'PENDING'" class="py-8">
-          <div class="text-yellow-600 text-6xl mb-4">&#9203;</div>
-          <h2 class="text-xl font-bold text-gray-900">Pago pendiente</h2>
-          <p class="text-gray-600 mt-2">
-            Tu pago esta siendo procesado por tu entidad financiera.
-            Te notificaremos por correo en unos minutos.
-          </p>
-          <div class="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-            <p class="text-sm text-yellow-700">
-              CUS: <span class="font-mono font-bold">{{ transaction.trazabilityCode }}</span>
+          <!-- PENDING: texto literal ACH + contacto (Requisito PSE #11) -->
+          <div v-if="transactionState === 'PENDING'"
+               class="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-left">
+            <p class="text-sm text-yellow-800 font-medium">
+              Por favor verificar si el debito fue realizado en el Banco.
+            </p>
+            <p v-if="hasContact" class="text-sm text-yellow-700 mt-2">
+              Si tienes dudas, comunicate con nosotros:
+              <span v-if="CONTACT_PHONE"><br />Telefono: {{ CONTACT_PHONE }}</span>
+              <span v-if="CONTACT_EMAIL"><br />Correo: {{ CONTACT_EMAIL }}</span>
             </p>
           </div>
+
+          <!-- OK -->
+          <p v-else-if="transactionState === 'OK'" class="mt-4 text-xs text-gray-500">
+            Recibiras el soporte de pago en tu correo electronico.
+          </p>
+
+          <!-- Rechazada / Fallida: causal + contacto -->
+          <template v-else-if="['NOT_AUTHORIZED', 'FAILED'].includes(transactionState)">
+            <RejectionReason
+              :cause-rejection="detailed?.causeRejection"
+              :rejection-description="detailed?.rejectionDescription"
+              :state-description="detailed?.stateDescription"
+              @retry="goToCheckout"
+            />
+            <div v-if="hasContact" class="mt-3 p-3 bg-gray-50 rounded-lg text-left text-sm text-gray-600">
+              Para mayor informacion comunicate con nosotros:
+              <span v-if="CONTACT_PHONE"><br />Telefono: {{ CONTACT_PHONE }}</span>
+              <span v-if="CONTACT_EMAIL"><br />Correo: {{ CONTACT_EMAIL }}</span>
+            </div>
+          </template>
         </div>
 
         <!-- Boton de volver -->
@@ -131,6 +165,10 @@ interface TransactionData {
   paymentOrigin?: number;
   bankProcessDate?: string;
   transactionState?: string;
+  financialInstitutionName?: string;
+  paymentDescription?: string;
+  serviceNIT?: string;
+  serviceName?: string;
 }
 
 interface DetailedData {
@@ -150,6 +188,17 @@ const transaction: Ref<TransactionData> = ref({});
 const transactionState: Ref<string> = ref('');
 const detailed: Ref<DetailedData | null> = ref(null);
 
+// Datos del comercio y contacto (Requisitos PSE #6, #7, #11)
+const COMPANY_NIT: string = import.meta.env.VITE_COMPANY_NIT || '';
+const COMPANY_NAME: string = import.meta.env.VITE_COMPANY_NAME || 'Junta Atlantico S.A.S.';
+const CONTACT_PHONE: string = import.meta.env.VITE_CONTACT_PHONE || '';
+const CONTACT_EMAIL: string = import.meta.env.VITE_CONTACT_EMAIL || '';
+
+// Snapshot del formulario capturado al montar, ANTES de que clearSession()
+// borre la PII: permite mostrar descripción y banco en el comprobante.
+const formSnapshot = ref<{ description?: string }>({});
+const bankNameSnapshot = ref<string>('');
+
 const { start: startPolling, stop: stopPolling } = usePolling();
 
 const paymentModeLabel: ComputedRef<string> = computed(() =>
@@ -158,6 +207,33 @@ const paymentModeLabel: ComputedRef<string> = computed(() =>
 const paymentOriginLabel: ComputedRef<string> = computed(() =>
   transaction.value.paymentOrigin ? getPaymentOriginLabel(transaction.value.paymentOrigin) : ''
 );
+
+const STATE_LABELS: Record<string, string> = {
+  OK: 'Aprobada',
+  PENDING: 'Pendiente',
+  NOT_AUTHORIZED: 'Rechazada',
+  FAILED: 'Fallida'
+};
+const stateLabel: ComputedRef<string> = computed(
+  () => STATE_LABELS[transactionState.value] || transactionState.value || '—'
+);
+
+// Comprobante unificado (Requisito PSE #11): NIT, Razón Social, Estado, Banco,
+// CUS, TicketId, Fecha, Valor y Descripción. Se muestra en los 4 estados.
+const receipt = computed(() => ({
+  nit: COMPANY_NIT || transaction.value.serviceNIT || '',
+  companyName: COMPANY_NAME || transaction.value.serviceName || '',
+  state: stateLabel.value,
+  bank: transaction.value.financialInstitutionName || bankNameSnapshot.value || '—',
+  cus: transaction.value.trazabilityCode || '—',
+  ticketId: transaction.value.ticketId || '—',
+  date: transaction.value.bankProcessDate ? formatDate(transaction.value.bankProcessDate) : '—',
+  amount: typeof transaction.value.transactionValue === 'number'
+    ? formatCurrency(transaction.value.transactionValue) : '—',
+  description: transaction.value.paymentDescription || formSnapshot.value.description || '—'
+}));
+
+const hasContact: ComputedRef<boolean> = computed(() => !!(CONTACT_PHONE || CONTACT_EMAIL));
 
 function formatDate(iso: string): string {
   try {
@@ -173,6 +249,7 @@ function clearSession(): void {
   sessionStorage.removeItem('pse_trazability_code');
   sessionStorage.removeItem('pse_ticket_id');
   sessionStorage.removeItem('pse_form_data');
+  sessionStorage.removeItem('pse_bank_name');
 }
 
 // CORRECCION: detener el polling al desmontar la vista. Antes, si el usuario
@@ -183,6 +260,18 @@ onUnmounted(() => {
 });
 
 onMounted(async () => {
+  // Capturar datos para el comprobante ANTES de cualquier limpieza de sesión.
+  try {
+    const raw = sessionStorage.getItem('pse_form_data');
+    if (raw) {
+      const fd = JSON.parse(raw) as { description?: string };
+      formSnapshot.value = { description: fd.description };
+    }
+  } catch {
+    /* ignore */
+  }
+  bankNameSnapshot.value = sessionStorage.getItem('pse_bank_name') || '';
+
   let trazabilityCode: string | null = new URLSearchParams(window.location.search).get('trazabilityCode');
   if (!trazabilityCode) {
     trazabilityCode = sessionStorage.getItem('pse_trazability_code');

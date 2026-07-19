@@ -4,7 +4,7 @@
   "description": "Backend para integración PSE Avanza v21",
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "dev": "ts-node server.ts",
     "test": "jest --forceExit --detectOpenHandles",

@@ -1,0 +1,38 @@
+# Normalizacion de saltos de linea para el proyecto PSE Junta Atlantico
+# Evita el warning "LF will be replaced by CRLF" y los diffs falsos por EOL
+# en equipos mixtos (Windows / Mac / Linux) y en CI/CD.
+
+# Por defecto: Git detecta si es texto y guarda LF en el repositorio
+* text=auto eol=lf
+
+# Codigo fuente y config -> LF
+*.ts    text eol=lf
+*.js    text eol=lf
+*.vue   text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.env   text eol=lf
+
+# Scripts propios de Windows -> CRLF (los necesitan)
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# Binarios: Git no debe tocarlos
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.eot   binary
+
+# SVG es texto (XML) -> LF
+*.svg   text eol=lf

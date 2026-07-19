@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import pseService from '../services/pse.service';
+import bankListService from '../services/bankList.service';
 import { FINAL_STATES } from '../config/constants';
 import doublePaymentService from '../services/doublePayment.service';
 import { getPSEErrorMessage } from '../utils/errorMessages';
@@ -7,47 +8,19 @@ import logger from '../utils/logger';
 import { CreateTransactionInput } from '../validation/schemas';
 import { PSEApiResponse } from '../../shared/types/pse-api';
 
-const MOCK_BANKS = [
-  { financialInstitutionCode: '001', financialInstitutionName: 'BANCO DE BOGOTA' },
-  { financialInstitutionCode: '007', financialInstitutionName: 'BANCO DAVIVIENDA' },
-  { financialInstitutionCode: '006', financialInstitutionName: 'BANCO DE OCCIDENTE' },
-  { financialInstitutionCode: '009', financialInstitutionName: 'BANCO POPULAR' },
-  { financialInstitutionCode: '012', financialInstitutionName: 'BANCO COLPATRA' },
-  { financialInstitutionCode: '013', financialInstitutionName: 'BANCO COLMENA' },
-  { financialInstitutionCode: '023', financialInstitutionName: 'BANCO CONTINENTAL' },
-  { financialInstitutionCode: '032', financialInstitutionName: 'BANCO SANTANDER' },
-  { financialInstitutionCode: '040', financialInstitutionName: 'BANCO BBVA COLOMBIA' },
-  { financialInstitutionCode: '052', financialInstitutionName: 'BANCO FALABELLA' },
-  { financialInstitutionCode: '058', financialInstitutionName: 'BANCO MUNDO MUJER' },
-  { financialInstitutionCode: '059', financialInstitutionName: 'BANCO VILLAS' },
-  { financialInstitutionCode: '060', financialInstitutionName: 'BANCO PICHINCHA' },
-  { financialInstitutionCode: '061', financialInstitutionName: 'BANCO PROMERICA' },
-  { financialInstitutionCode: '062', financialInstitutionName: 'BANCO W' },
-  { financialInstitutionCode: '063', financialInstitutionName: 'BANCO SERFINANZA' },
-  { financialInstitutionCode: '065', financialInstitutionName: 'BANCO BLUE' },
-  { financialInstitutionCode: '066', financialInstitutionName: 'BANCO COOPERATIVO COOPCENTRAL' },
-  { financialInstitutionCode: '067', financialInstitutionName: 'BANCO Caja Social' },
-  { financialInstitutionCode: '069', financialInstitutionName: 'BANCO AV VILLAS' },
-  { financialInstitutionCode: '070', financialInstitutionName: 'BANCO DE CREDITO' },
-  { financialInstitutionCode: '107', financialInstitutionName: 'BANCO CAJA SOCIAL' },
-  { financialInstitutionCode: '112', financialInstitutionName: 'BANCO PRODUBANCO' },
-  { financialInstitutionCode: '120', financialInstitutionName: 'BANCO ITAU' }
-];
 
 class PSEController {
   async getBankList(req: Request, res: Response): Promise<void> {
     try {
-      let banks: PSEApiResponse;
-      try {
-        banks = await pseService.getBankList();
-      } catch (error) {
-        logger.warn('PSE API no disponible, usando bancos mock');
-        banks = { returnCode: 'SUCCESS', banks: MOCK_BANKS } as unknown as PSEApiResponse;
-      }
+      // Requisito PSE #4: la lista se sirve desde caché diaria (GetBankListNF
+      // se llama a lo sumo una vez al día, no por transacción).
+      // Requisito PSE #8: ordenada alfabéticamente.
+      const { banks, source, cached } = await bankListService.getBanks();
       res.json({
         success: true,
-        data: banks.banks || MOCK_BANKS,
-        message: 'Lista de bancos obtenida exitosamente'
+        data: banks,
+        message: 'Lista de bancos obtenida exitosamente',
+        meta: { source, cached }
       });
     } catch (error) {
       logger.error('Error en getBankList:', (error as Error).message);
