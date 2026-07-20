@@ -1,12 +1,12 @@
-# 📦 PLAN DE IMPLEMENTACIÓN v2.1 — INTEGRACIÓN PSE AVANZA
-> **v2.1 (post-implementación):** código fuente actualizado a **TypeScript** (tal como está implementado en el repositorio) e incorporadas las correcciones de reCAPTCHA v3, validación de decimales, orígenes por entorno y limpieza del polling/PII, más los **ajustes de certificación PSE-ACH (14 puntos)**. Ver **§16. Registro de cambios v2.1** al final.
+# 📦 PLAN DE IMPLEMENTACIÓN v3.0 — INTEGRACIÓN PSE AVANZA
+> **v3.0 (despliegue en producción):** incluye todos los ajustes de v2.1 más la arquitectura de despliegue en Hostinger (Opción B: dos subdominios independientes), correcciones de producción (`trust proxy`, `listen()` sin guarda, `tsconfig.build.json`), script de generación de zips cross-platform y pruebas de verificación en producción. Ver **§16. Registro de cambios v3.0** al final.
 ## Ajustado a Instructivo ACH Colombia **Versión 21 (Octubre 2025)**
 
 ### JUNTA REGIONAL DE CALIFICACIÓN DE INVALIDEZ DEL ATLÁNTICO — Junta Atlántico S.A.S.
 
 ---
 
-**Versión del prompt:** 2.0
+**Versión del prompt:** 3.0
 **Fecha:** Julio 2026
 **Instructivo ACH referencia:** v21 (octubre 2025) — código GCL-VEV-INS-025
 **Tipo de Integración:** Directa con ACH Colombia (Desarrollo Independiente)
@@ -32,7 +32,8 @@
 13. [MANEJO DE ERRORES Y MENSAJES LITERALES ACH](#13-manejo-de-errores-y-mensajes-literales-ach)
 14. [CHECKLIST DE IMPLEMENTACIÓN](#14-checklist-de-implementación)
 15. [ANEXOS](#15-anexos)
-16. [REGISTRO DE CAMBIOS v2.1 — Ajustes post-implementación](#16-registro-de-cambios-v21--ajustes-post-implementación)
+16. [DESPLIEGUE EN HOSTINGER](#16-despliegue-en-hostinger)
+17. [REGISTRO DE CAMBIOS v3.0 — Despliegue en producción](#17-registro-de-cambios-v30--despliegue-en-producción)
 
 ---
 
@@ -393,10 +394,18 @@ PORT=3000
 ALLOWED_ORIGIN=https://www.juntaatlantico.co
 # Validacion de Origin (opcional, Seccion 11 ACH): si es 'true' rechaza
 # peticiones sin cabecera Origin/Referer. Por defecto desactivado.
-STRICT_ORIGIN=false
+STRICT_ORIGIN=true
 # Cache de lista de bancos (Requisito PSE #4: GetBankListNF <= 1 vez/dia)
 BANK_LIST_CACHE_TTL_MS=86400000
 BANK_LIST_FALLBACK_TTL_MS=300000
+# Claves AES-256-GCM (generar con: node -e "require('crypto').randomBytes(32).toString('base64')")
+# PSE_ENCRYPTION_KEY: 32 bytes en base64
+# PSE_ENCRYPTION_IV: 12 bytes en base64
+# DB_ENCRYPTION_KEY: 32 bytes en base64
+# NUNCA commitear estos valores. Configurar directamente en Hostinger.
+PSE_ENCRYPTION_KEY=<generar-con-node>
+PSE_ENCRYPTION_IV=<generar-con-node>
+DB_ENCRYPTION_KEY=<generar-con-node>
 LOG_LEVEL=info
 
 # ============================================
@@ -724,31 +733,20 @@ Para Junta Atlántico (desarrollo independiente), los datos del beneficiario **d
 beneficiaryEntity: {
   beneficiaryEntityIdentificationType: 'NIT',
   beneficiaryEntityIdentification: '901234567-8',  // NIT de Junta Atlántico (solo números, máx 15)
-  beneficiaryEntityName: 'JUNTA ATLANTICO S.A.S.',
-  beneficiaryEntityCIIUCategory: '8692'           // CIIU verificado con ACH
-}
-```
-
-> Si la terna `beneficiaryEntity*` no se envía o viene vacía, PSE **NO crea la transacción**.
-
-### 7.4 Filtro de caracteres prohibidos
-
-```js
-// Regex prohibido
-const FORBIDDEN_CHARS = /[|"]/;
-
-// Aplica a: paymentDescription, referenceNumber1, referenceNumber2, referenceNumber3
-```
-
----
-
 ## 8. ESTRUCTURA DEL PROYECTO
 
 > Implementación real en **TypeScript**. Los tipos compartidos entre backend y
-> frontend viven en `shared/types/`.
+> frontend viven en `shared/types/`. El despliegue usa dos subdominios en Hostinger
+> (Opción B): `pse.juntaatlantico.co` (frontend estático) y `api.juntaatlantico.co`
+> (backend Node.js).
 
 ```
 junta-atlantico-pse/
+├── .gitattributes                     # Normalización de EOL (LF) para Windows/Linux/Mac
+├── .gitignore
+├── scripts/
+│   └── build-zips.mjs                # Genera deploy/backend.zip y deploy/frontend.zip
+│                                      # Cross-platform (no usa comando "zip" de Linux)
 ├── shared/
 │   └── types/                         # Tipos TS compartidos (backend + frontend)
 │       ├── bank.ts
@@ -759,19 +757,22 @@ junta-atlantico-pse/
 │       ├── pse-api.ts
 │       └── transaction.ts
 ├── backend/
-│   ├── server.ts
-│   ├── tsconfig.json
+│   ├── server.ts                      # Express API pura (Opción B: sin servir estáticos)
+│   ├── tsconfig.json                  # Editor + ts-jest (incluye tests, types: node+jest)
+│   ├── tsconfig.build.json            # Build de producción (excluye tests)
+│   ├── jest.config.js
+│   ├── ecosystem.config.js            # PM2 (referencia, no usado en Hostinger)
 │   ├── package.json
 │   ├── config/
 │   │   ├── constants.ts
 │   │   └── pse.config.ts
 │   ├── services/
-│   │   ├── encryption.service.ts       # AES-256-GCM
-│   │   ├── token.service.ts            # OAuth 2.0 con caché
-│   │   ├── pse.service.ts              # Cliente PSE
-│   │   ├── bankList.service.ts         # Caché diaria de bancos (Req #4) + orden alfabético (Req #8)
-│   │   ├── recaptcha.service.ts        # Verify reCAPTCHA v3
-│   │   └── doublePayment.service.ts    # Control de doble pago
+│   │   ├── encryption.service.ts      # AES-256-GCM
+│   │   ├── token.service.ts           # OAuth 2.0 con caché
+│   │   ├── pse.service.ts             # Cliente PSE
+│   │   ├── bankList.service.ts        # Caché diaria de bancos (Req #4) + orden A-Z (Req #8)
+│   │   ├── recaptcha.service.ts       # Verify reCAPTCHA v3
+│   │   └── doublePayment.service.ts   # Control de doble pago (Req #12)
 │   ├── controllers/
 │   │   └── pse.controller.ts
 │   ├── routes/
@@ -786,14 +787,14 @@ junta-atlantico-pse/
 │   ├── models/
 │   │   └── transaction.model.ts
 │   ├── validation/
-│   │   ├── middleware.ts               # validateBody / validateParams (Zod)
-│   │   └── schemas.ts                  # Esquemas Zod (createTransaction, etc.)
+│   │   ├── middleware.ts
+│   │   └── schemas.ts                 # Zod: máx 2 decimales en amount/vat
 │   ├── errors/
 │   │   └── index.ts
 │   ├── utils/
 │   │   ├── causalRejection.ts
-│   │   ├── dates.ts                    # nowColombiaISO() (offset -05:00)
-│   │   ├── errorMessages.ts
+│   │   ├── dates.ts
+│   │   ├── errorMessages.ts           # Req #7: códigos PSE → mensaje genérico
 │   │   ├── logger.ts
 │   │   ├── paymentMode.ts
 │   │   └── validators.ts
@@ -804,44 +805,47 @@ junta-atlantico-pse/
 │       ├── validators.test.ts
 │       └── integration/paymentFlow.test.ts
 └── frontend/
+    ├── .env                           # Dev: VITE_API_URL=http://localhost:3000/api/pse
+    ├── .env.production                # Prod: VITE_API_URL=https://api.juntaatlantico.co/api/pse
+    ├── env.d.ts                       # Tipos de las variables VITE_*
     ├── package.json
     ├── tsconfig.json
-    ├── vite.config.ts
+    ├── vite.config.js
     └── src/
-        ├── main.ts                     # Sin plugin: reCAPTCHA se carga en su service
+        ├── main.ts                    # Sin plugin vue-recaptcha-v3
         ├── App.vue
         ├── router/index.ts
         ├── services/
         │   ├── api.service.ts
-        │   └── recaptcha.service.ts    # Carga manual api.js?render=<SITE_KEY> (v3)
+        │   └── recaptcha.service.ts   # Carga manual api.js?render=<SITE_KEY> (v3)
         ├── composables/
-        │   ├── usePolling.ts
+        │   ├── usePolling.ts          # stop() cancela timer inmediatamente
         │   └── useReCaptcha.ts
         ├── stores/
         │   └── payment.store.ts
         ├── utils/
-        │   ├── causalRejection.ts
-        │   ├── errorMessages.ts
+        │   ├── errorMessages.ts       # Req #7: shouldOfferContact()
         │   ├── formatters.ts
-        │   ├── paymentMode.ts
-        │   └── validators.ts
+        │   ├── validators.ts
+        │   ├── causalRejection.ts
+        │   └── paymentMode.ts
         ├── components/
-        │   ├── BankList.vue
+        │   ├── BankList.vue           # Persiste nombre del banco para el comprobante
         │   ├── ErrorAlert.vue
         │   ├── LoadingSpinner.vue
-        │   ├── PaymentForm.vue
+        │   ├── PaymentForm.vue        # Logo PSE + texto aclaratorio (Req #1)
         │   ├── PaymentSummary.vue
         │   └── RejectionReason.vue
         └── views/
             ├── Checkout.vue
-            └── PaymentReturn.vue
+            └── PaymentReturn.vue      # Comprobante completo 4 estados (Req #11)
 ```
 
 ---
 
 ## 9. CÓDIGO FUENTE COMPLETO — BACKEND (TypeScript)
 
-> Código real del repositorio. Incluye las correcciones v2.1: `tsconfig` válido, validación de máx. 2 decimales en `amount`/`vat`, `path` en los refines de Zod, y orígenes gestionados por `getAllowedOrigins()`.
+> Código real del repositorio — rama `master`, último commit. Incluye todos los ajustes de v2.1 y v3.0: `trust proxy`, `listen()` sin guarda, `tsconfig.build.json`, validación de decimales, orígenes por env, mensajes genéricos PSE #7 en backend y frontend.
 
 ### 9.0 Tipos compartidos (`shared/types/`)
 
@@ -1105,10 +1109,10 @@ export interface APIErrorResponse {
   "name": "junta-atlantico-pse-backend",
   "version": "2.0.0",
   "description": "Backend para integración PSE Avanza v21",
-  "main": "dist/server.js",
+  "main": "dist/backend/server.js",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "start": "node dist/server.js",
+    "build": "echo \"Build omitido: dist/ incluido en el zip\"",
+    "start": "node dist/backend/server.js",
     "dev": "ts-node server.ts",
     "test": "jest --forceExit --detectOpenHandles",
     "test:integration": "jest tests/integration --forceExit --detectOpenHandles",
@@ -1185,7 +1189,47 @@ export interface APIErrorResponse {
 }
 ```
 
-### 9.3 `backend/config/constants.ts`
+### 9.3 `backend/tsconfig.build.json`
+
+```json
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "exclude": [
+    "node_modules",
+    "dist",
+    "tests",
+    "**/*.test.ts"
+  ]
+}
+```
+
+### 9.4 `backend/jest.config.js`
+
+```javascript
+module.exports = {
+  preset: 'ts-jest',
+  testEnvironment: 'node',
+  roots: ['<rootDir>/tests'],
+  testMatch: ['**/*.test.ts'],
+  transform: {
+    '^.+\\.ts$': 'ts-jest'
+  },
+  moduleFileExtensions: ['ts', 'js', 'json'],
+  collectCoverageFrom: [
+    'services/**/*.ts',
+    'utils/**/*.ts',
+    'controllers/**/*.ts',
+    'middleware/**/*.ts'
+  ],
+  coverageDirectory: 'coverage',
+  coverageReporters: ['text', 'lcov']
+};
+```
+
+### 9.5 `backend/config/constants.ts`
 
 ```typescript
 import { TransactionState } from '../../shared/types/transaction';
@@ -1238,7 +1282,7 @@ export const RECAPTCHA_ACTIONS = {
 } as const;
 ```
 
-### 9.4 `backend/config/pse.config.ts`
+### 9.6 `backend/config/pse.config.ts`
 
 ```typescript
 import { PSEConfig } from '../../shared/types/config';
@@ -1287,7 +1331,7 @@ const config: PSEConfig = {
 export default config;
 ```
 
-### 9.5 `backend/services/encryption.service.ts`
+### 9.7 `backend/services/encryption.service.ts`
 
 ```typescript
 import crypto from 'crypto';
@@ -1369,7 +1413,7 @@ class EncryptionService {
 export default new EncryptionService();
 ```
 
-### 9.6 `backend/services/token.service.ts`
+### 9.8 `backend/services/token.service.ts`
 
 ```typescript
 import axios from 'axios';
@@ -1433,7 +1477,7 @@ class TokenService {
 export default new TokenService();
 ```
 
-### 9.7 `backend/services/pse.service.ts`
+### 9.9 `backend/services/pse.service.ts`
 
 ```typescript
 import axios from 'axios';
@@ -1636,7 +1680,7 @@ class PSEService {
 export default new PSEService();
 ```
 
-### 9.8 `backend/services/bankList.service.ts`
+### 9.10 `backend/services/bankList.service.ts`
 
 ```typescript
 import pseService from './pse.service';
@@ -1733,7 +1777,7 @@ export default {
 };
 ```
 
-### 9.9 `backend/services/recaptcha.service.ts`
+### 9.11 `backend/services/recaptcha.service.ts`
 
 ```typescript
 import axios from 'axios';
@@ -1802,7 +1846,7 @@ class RecaptchaService {
 export default new RecaptchaService();
 ```
 
-### 9.10 `backend/services/doublePayment.service.ts`
+### 9.12 `backend/services/doublePayment.service.ts`
 
 ```typescript
 import config from '../config/pse.config';
@@ -1859,7 +1903,7 @@ class DoublePaymentService {
 export default new DoublePaymentService();
 ```
 
-### 9.11 `backend/controllers/pse.controller.ts`
+### 9.13 `backend/controllers/pse.controller.ts`
 
 ```typescript
 import { Request, Response } from 'express';
@@ -2087,7 +2131,7 @@ class PSEController {
 export default new PSEController();
 ```
 
-### 9.12 `backend/routes/pse.routes.ts`
+### 9.14 `backend/routes/pse.routes.ts`
 
 ```typescript
 import { Router, Request, Response } from 'express';
@@ -2169,7 +2213,7 @@ router.post('/transaction/finalize',
 export default router;
 ```
 
-### 9.13 `backend/middleware/error.middleware.ts`
+### 9.15 `backend/middleware/error.middleware.ts`
 
 ```typescript
 import { Request, Response, NextFunction } from 'express';
@@ -2230,7 +2274,7 @@ export const notFoundHandler = (req: Request, res: Response): void => {
 };
 ```
 
-### 9.14 `backend/middleware/rateLimit.middleware.ts`
+### 9.16 `backend/middleware/rateLimit.middleware.ts`
 
 ```typescript
 import { Request, Response, NextFunction } from 'express';
@@ -2262,7 +2306,7 @@ export const globalLimiter = rateLimit({
 });
 ```
 
-### 9.15 `backend/middleware/recaptcha.middleware.ts`
+### 9.17 `backend/middleware/recaptcha.middleware.ts`
 
 ```typescript
 import { Request, Response, NextFunction } from 'express';
@@ -2299,7 +2343,7 @@ export const verifyRecaptcha = (action: string = RECAPTCHA_ACTIONS.PAYMENT) => {
 };
 ```
 
-### 9.16 `backend/middleware/requestId.middleware.ts`
+### 9.18 `backend/middleware/requestId.middleware.ts`
 
 ```typescript
 import { Request, Response, NextFunction } from 'express';
@@ -2320,7 +2364,7 @@ export const requestIdMiddleware = (req: Request, res: Response, next: NextFunct
 };
 ```
 
-### 9.17 `backend/middleware/sanitize.middleware.ts`
+### 9.19 `backend/middleware/sanitize.middleware.ts`
 
 ```typescript
 import { Request, Response, NextFunction } from 'express';
@@ -2384,7 +2428,7 @@ export const checkForbiddenChars = (req: Request, res: Response, next: NextFunct
 };
 ```
 
-### 9.18 `backend/middleware/securityHeaders.middleware.ts`
+### 9.20 `backend/middleware/securityHeaders.middleware.ts`
 
 ```typescript
 import { Request, Response, NextFunction } from 'express';
@@ -2464,7 +2508,7 @@ export const validateOrigin = (
 };
 ```
 
-### 9.19 `backend/models/transaction.model.ts`
+### 9.21 `backend/models/transaction.model.ts`
 
 ```typescript
 import crypto from 'crypto';
@@ -2536,7 +2580,7 @@ class TransactionModel {
 export default new TransactionModel();
 ```
 
-### 9.20 `backend/validation/middleware.ts`
+### 9.22 `backend/validation/middleware.ts`
 
 ```typescript
 import { Request, Response, NextFunction } from 'express';
@@ -2586,7 +2630,7 @@ export const validateParams = (schema: ZodSchema) => {
 };
 ```
 
-### 9.21 `backend/validation/schemas.ts`
+### 9.23 `backend/validation/schemas.ts`
 
 ```typescript
 import { z } from 'zod';
@@ -2659,7 +2703,7 @@ export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
 export type FinalizeTransactionInput = z.infer<typeof finalizeTransactionSchema>;
 ```
 
-### 9.22 `backend/errors/index.ts`
+### 9.24 `backend/errors/index.ts`
 
 ```typescript
 export class AppError extends Error {
@@ -2730,7 +2774,7 @@ export class EncryptionError extends AppError {
 }
 ```
 
-### 9.23 `backend/utils/causalRejection.ts`
+### 9.25 `backend/utils/causalRejection.ts`
 
 ```typescript
 export const CAUSAL_REJECTION: Record<string, string> = {
@@ -2771,7 +2815,7 @@ export function getCausalMessage(code: string): string {
 }
 ```
 
-### 9.24 `backend/utils/dates.ts`
+### 9.26 `backend/utils/dates.ts`
 
 ```typescript
 export const COLOMBIA_OFFSET_HOURS: number = -5;
@@ -2798,7 +2842,7 @@ export function nowColombiaISO(): string {
 }
 ```
 
-### 9.25 `backend/utils/errorMessages.ts`
+### 9.27 `backend/utils/errorMessages.ts`
 
 ```typescript
 import { TransactionState } from '../../shared/types/transaction';
@@ -2913,7 +2957,7 @@ export function getDoublePaymentMessage(state: string, ticketId: string | number
 }
 ```
 
-### 9.26 `backend/utils/logger.ts`
+### 9.28 `backend/utils/logger.ts`
 
 ```typescript
 import winston from 'winston';
@@ -2952,7 +2996,7 @@ const logger: winston.Logger = winston.createLogger({
 export default logger;
 ```
 
-### 9.27 `backend/utils/paymentMode.ts`
+### 9.29 `backend/utils/paymentMode.ts`
 
 ```typescript
 export const PAYMENT_MODE_LABELS: Record<number, string> = {
@@ -2980,7 +3024,7 @@ export function getPaymentOriginLabel(code: number): string {
 }
 ```
 
-### 9.28 `backend/utils/validators.ts`
+### 9.30 `backend/utils/validators.ts`
 
 ```typescript
 import { UserType, IdentificationType, PaymentData } from '../../shared/types/payment';
@@ -3052,7 +3096,7 @@ export class PaymentValidator {
 }
 ```
 
-### 9.29 `backend/server.ts`
+### 9.31 `backend/server.ts`
 
 ```typescript
 import dotenv from 'dotenv';
@@ -3072,6 +3116,14 @@ import logger from './utils/logger';
 
 const app: Express = express();
 const PORT: number = parseInt(process.env.PORT || '3000', 10);
+
+
+// Hostinger (y cualquier hosting gestionado) pone un proxy inverso (Nginx)
+// delante de Node.js. Sin esta configuracion, Express ignora el header
+// X-Forwarded-For y el rate limit identifica a todos los usuarios como
+// si fueran la misma IP (la del proxy interno).
+// El valor 1 indica "confiar en un nivel de proxy" — el de Hostinger.
+app.set('trust proxy', 1);
 
 // ============================================
 // MIDDLEWARES DE SEGURIDAD (Seccion 11 ACH)
@@ -3134,40 +3186,21 @@ app.use(notFoundHandler);
 // Error global
 app.use(errorHandler);
 
-if (require.main === module) {
-  app.listen(PORT, () => {
-    logger.info(`Servidor PSE ejecutandose en puerto ${PORT}`);
-    logger.info(`Entorno: ${config.env}`);
-    logger.info(`reCAPTCHA: ${config.recaptcha.secret ? 'activo' : 'INACTIVO'}`);
-    logger.info(`Rate Limit: ${config.rateLimit.max} req/${config.rateLimit.windowMs / 1000}s`);
-  });
-}
+app.listen(PORT, () => {
+  logger.info(`Servidor PSE ejecutandose en puerto ${PORT}`);
+  logger.info(`Entorno: ${config.env}`);
+  logger.info(`reCAPTCHA: ${config.recaptcha.secret ? 'activo' : 'INACTIVO'}`);
+  logger.info(`Rate Limit: ${config.rateLimit.max} req/${config.rateLimit.windowMs / 1000}s`);
+});
 
 export default app;
-```
-
-### 9.30 `backend/tsconfig.build.json`
-
-```json
-{
-  "extends": "./tsconfig.json",
-  "compilerOptions": {
-    "types": ["node"]
-  },
-  "exclude": [
-    "node_modules",
-    "dist",
-    "tests",
-    "**/*.test.ts"
-  ]
-}
 ```
 
 ---
 
 ## 10. CÓDIGO FUENTE COMPLETO — FRONTEND (TypeScript + Vue 3)
 
-> Código real del repositorio. Incluye las correcciones v2.1: reCAPTCHA v3 por carga manual (sin el plugin `vue-recaptcha-v3`), `usePolling` con cancelación inmediata del timer, y `PaymentReturn` con `onUnmounted` + limpieza de PII en todos los estados terminales.
+> Código real del repositorio. Frontend compilado con Vite y desplegado como **sitio estático HTML** en Hostinger (`pse.juntaatlantico.co`). Las variables `VITE_*` se hornean en el build — no se configuran en el servidor.
 
 ### 10.1 `frontend/package.json`
 
@@ -3294,7 +3327,25 @@ interface ImportMeta {
 }
 ```
 
-### 10.5 `frontend/src/main.ts`
+### 10.5 `frontend/index.html`
+
+```
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pago PSE - Junta Atlántico</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
+```
+
+### 10.6 `frontend/src/main.ts`
 
 ```typescript
 import { createApp } from 'vue';
@@ -3302,21 +3353,22 @@ import { createPinia } from 'pinia';
 import App from './App.vue';
 import router from './router';
 import './assets/css/main.css';
-
+ 
 // El plugin VueReCaptcha (vue-recaptcha-v3) se elimino: cargaba api.js con
 // "?render=explicit", lo que impedia que grecaptcha registrara el cliente v3
 // del site key ("Invalid site key or not loaded in api.js"). La carga de
 // reCAPTCHA la hace unicamente src/services/recaptcha.service.ts en modo v3.
-
+ 
 const app = createApp(App);
-
+ 
 app.use(createPinia());
 app.use(router);
-
+ 
 app.mount('#app');
+ 
 ```
 
-### 10.6 `frontend/src/App.vue`
+### 10.7 `frontend/src/App.vue`
 
 ```vue
 <template>
@@ -3329,7 +3381,7 @@ app.mount('#app');
 </script>
 ```
 
-### 10.7 `frontend/src/router/index.ts`
+### 10.8 `frontend/src/router/index.ts`
 
 ```typescript
 import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router';
@@ -3361,9 +3413,105 @@ const router = createRouter({
 export default router;
 ```
 
-### 10.8 `frontend/src/services/api.service.ts`
+### 10.9 `frontend/src/services/api.service.ts`
 
 ```typescript
+// import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios';
+// import recaptchaService from './recaptcha.service';
+// import { APIErrorResponse } from '../../../shared/types/errors';
+
+// interface CreateTransactionResponse {
+//   success: boolean;
+//   data?: {
+//     trazabilityCode: string;
+//     pseURL: string;
+//     ticketId: number | string;
+//     transactionCycle: number;
+//   };
+//   message: string;
+//   code?: string;
+// }
+
+// interface BankListResponse {
+//   success: boolean;
+//   data: Array<{
+//     financialInstitutionCode: string;
+//     financialInstitutionName: string;
+//   }>;
+//   message: string;
+// }
+
+// class APIService {
+//   private baseURL: string;
+//   private client: AxiosInstance;
+
+//   constructor() {
+//     this.baseURL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api/pse';
+//     this.client = axios.create({
+//       baseURL: this.baseURL,
+//       timeout: 30000,
+//       headers: { 'Content-Type': 'application/json' }
+//     });
+
+//     this.client.interceptors.response.use(
+//       (response: AxiosResponse) => response,
+//       (error: AxiosError) => {
+//         if (error.response) {
+//           const data = error.response.data as Record<string, unknown>;
+//           throw {
+//             status: error.response.status,
+//             code: (data as any)?.code,
+//             message: (data as any)?.message || error.message,
+//             data: error.response.data
+//           } as APIErrorResponse;
+//         } else if (error.request) {
+//           throw { status: 0, code: 'NETWORK_ERROR', message: 'No se pudo conectar con el servidor' } as APIErrorResponse;
+//         } else {
+//           throw { status: 0, code: 'UNKNOWN', message: error.message } as APIErrorResponse;
+//         }
+//       }
+//     );
+//   }
+
+//   async getBanks(): Promise<BankListResponse> {
+//     const response = await this.client.get<BankListResponse>('/banks');
+//     return response.data;
+//   }
+
+//   async createTransaction(data: Record<string, any>): Promise<CreateTransactionResponse> {
+//     let recaptchaToken: string | null = null;
+//     try {
+//       recaptchaToken = await recaptchaService.execute('pse_payment');
+//     } catch (err) {
+//       console.warn('reCAPTCHA no disponible, continuando sin el:', err);
+//     }
+
+//     const response = await this.client.post<CreateTransactionResponse>('/transaction', {
+//       ...data,
+//       recaptchaToken
+//     });
+//     return response.data;
+//   }
+
+//   async getTransactionStatus(trazabilityCode: string): Promise<{ success: boolean; data: Record<string, unknown> }> {
+//     const response = await this.client.get(`/transaction/${trazabilityCode}/status`);
+//     return response.data;
+//   }
+
+//   async getTransactionDetailed(trazabilityCode: string): Promise<{ success: boolean; data: Record<string, unknown> }> {
+//     const response = await this.client.get(`/transaction/${trazabilityCode}/detailed`);
+//     return response.data;
+//   }
+
+//   async finalizeTransaction(data: Record<string, unknown>): Promise<{ success: boolean; data: Record<string, unknown> }> {
+//     const response = await this.client.post('/transaction/finalize', data);
+//     return response.data;
+//   }
+// }
+
+// export default new APIService();
+
+
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios';
 import recaptchaService from './recaptcha.service';
 import { APIErrorResponse } from '../../../shared/types/errors';
@@ -3427,11 +3575,23 @@ class APIService {
   }
 
   async createTransaction(data: Record<string, any>): Promise<CreateTransactionResponse> {
-    let recaptchaToken: string | null = null;
+    // CAMBIO: antes, si reCAPTCHA fallaba se hacia console.warn y se enviaba
+    // recaptchaToken = null/'' al backend, que respondia el FAIL_RECAPTCHA
+    // generico y ocultaba la causa real. Ahora se falla rapido con un error
+    // claro y NO se llama al backend con un token invalido.
+    let recaptchaToken: string;
     try {
       recaptchaToken = await recaptchaService.execute('pse_payment');
     } catch (err) {
-      console.warn('reCAPTCHA no disponible, continuando sin el:', err);
+      console.error('Error generando token reCAPTCHA:', err);
+      throw {
+        status: 0,
+        code: 'RECAPTCHA_UNAVAILABLE',
+        message:
+          'No se pudo inicializar la verificacion de seguridad (reCAPTCHA). ' +
+          'Recarga la pagina e intenta de nuevo. Si el problema persiste, ' +
+          'verifica tu conexion o desactiva bloqueadores de contenido.'
+      } as APIErrorResponse;
     }
 
     const response = await this.client.post<CreateTransactionResponse>('/transaction', {
@@ -3460,50 +3620,2018 @@ class APIService {
 export default new APIService();
 ```
 
-### 10.9 `frontend/src/services/recaptcha.service.ts`
+### 10.10 `frontend/src/services/recaptcha.service.ts`
 
 ```typescript
+// export default {
+//   init(): void {
+//     const siteKey: string | undefined = import.meta.env.VITE_RECAPTCHA_SITE_KEY;
+//     if (!siteKey) {
+//       console.warn('VITE_RECAPTCHA_SITE_KEY no configurado');
+//       return;
+//     }
+
+//     if (document.querySelector(`script[src*="recaptcha"]`)) {
+//       return;
+//     }
+
+//     const script = document.createElement('script');
+//     script.src = `https://www.google.com/recaptcha/api.js?render=${siteKey}`;
+
+//     // console.log("SITE KEY =", siteKey);
+//     // console.log("SCRIPT =", script.src);
+
+//     script.async = true;
+//     script.defer = true;
+//     document.head.appendChild(script);
+//   },
+
+//   async waitForReady(timeout: number = 5000): Promise<boolean> {
+//     const start = Date.now();
+//     while (Date.now() - start < timeout) {
+//       const grecaptcha = (window as any).grecaptcha;
+//       if (grecaptcha && typeof grecaptcha.execute === 'function') {
+//         return true;
+//       }
+//       await new Promise(r => setTimeout(r, 100));
+//     }
+//     return false;
+//   },
+
+//   async execute(action: string = 'pse_payment'): Promise<string> {
+//     const siteKey: string | undefined = import.meta.env.VITE_RECAPTCHA_SITE_KEY;
+//     if (!siteKey) {
+//       return '';
+//     }
+
+//     const ready = await this.waitForReady();
+//     if (!ready) {
+//       console.warn('reCAPTCHA no se cargo en tiempo esperado');
+//       return '';
+//     }
+
+//     try {
+//       const grecaptcha = (window as any).grecaptcha;
+//       if (grecaptcha && grecaptcha.enterprise) {
+//         return await grecaptcha.enterprise.execute(siteKey, { action });
+//       } else if (grecaptcha) {
+//         return await grecaptcha.execute(siteKey, { action });
+//       }
+//       return '';
+//     } catch (error) {
+//       console.warn('reCAPTCHA no disponible, continuando sin el:', error);
+//       return '';
+//     }
+//   }
+// };
+
+
+
+/**
+ * Servicio reCAPTCHA v3 (carga manual, sin plugin).
+ *
+ * CORRECCIONES vs version anterior:
+ * 1. El script se identifica con un ID propio y se carga SIEMPRE con
+ *    "?render=<SITE_KEY>" (modo v3 automatico). Antes, un selector generico
+ *    ('script[src*="recaptcha"]') detectaba el script del plugin
+ *    vue-recaptcha-v3 (cargado con "?render=explicit") y se saltaba la carga,
+ *    dejando a grecaptcha sin cliente para el site key.
+ * 2. Se espera con grecaptcha.ready(), que garantiza que el cliente del
+ *    site key ya esta registrado. Antes solo se comprobaba que existiera la
+ *    funcion grecaptcha.execute, lo cual ocurre ANTES del registro del
+ *    cliente (condicion de carrera).
+ * 3. Los fallos LANZAN error en lugar de devolver ''. Un token vacio
+ *    enviado al backend se convertia en un FAIL_RECAPTCHA generico que
+ *    ocultaba la causa real.
+ */
+
+const SCRIPT_ID = 'recaptcha-v3-api-script';
+
+function getSiteKey(): string {
+  const siteKey: string | undefined = import.meta.env.VITE_RECAPTCHA_SITE_KEY;
+  if (!siteKey) {
+    throw new Error('RECAPTCHA_UNAVAILABLE: VITE_RECAPTCHA_SITE_KEY no configurado');
+  }
+  return siteKey;
+}
+
 export default {
   init(): void {
-    const siteKey: string | undefined = import.meta.env.VITE_RECAPTCHA_SITE_KEY;
-    if (!siteKey) {
+    let siteKey: string;
+    try {
+      siteKey = getSiteKey();
+    } catch {
       console.warn('VITE_RECAPTCHA_SITE_KEY no configurado');
       return;
     }
 
-    if (document.querySelector(`script[src*="recaptcha"]`)) {
+    // Deduplicar SOLO contra nuestro propio script (por ID),
+    // no contra cualquier script que contenga "recaptcha" en la URL.
+    if (document.getElementById(SCRIPT_ID)) {
       return;
     }
 
     const script = document.createElement('script');
+    script.id = SCRIPT_ID;
     script.src = `https://www.google.com/recaptcha/api.js?render=${siteKey}`;
     script.async = true;
     script.defer = true;
     document.head.appendChild(script);
   },
 
-  async waitForReady(timeout: number = 5000): Promise<boolean> {
+  /**
+   * Espera a que api.js este cargado Y el cliente del site key registrado.
+   * Lanza error si no ocurre dentro del timeout.
+   */
+  async waitForReady(timeout: number = 10000): Promise<void> {
     const start = Date.now();
+
+    // 1) Esperar a que window.grecaptcha exista con su metodo ready()
     while (Date.now() - start < timeout) {
       const grecaptcha = (window as any).grecaptcha;
-      if (grecaptcha && typeof grecaptcha.execute === 'function') {
-        return true;
+      if (grecaptcha && typeof grecaptcha.ready === 'function') {
+        // 2) ready() resuelve cuando el cliente del site key esta registrado
+        await new Promise<void>((resolve) => grecaptcha.ready(resolve));
+        return;
       }
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
     }
-    return false;
+
+    throw new Error(
+      'RECAPTCHA_UNAVAILABLE: el script de reCAPTCHA no cargo en el tiempo esperado'
+    );
   },
 
+  /**
+   * Genera un token v3 para la accion indicada.
+   * Lanza error si reCAPTCHA no esta disponible (NUNCA devuelve '').
+   */
   async execute(action: string = 'pse_payment'): Promise<string> {
-    const siteKey: string | undefined = import.meta.env.VITE_RECAPTCHA_SITE_KEY;
-    if (!siteKey) {
-      return '';
+    const siteKey = getSiteKey();
+
+    // Asegurar que el script este inyectado aunque init() no se haya llamado
+    this.init();
+    await this.waitForReady();
+
+    const grecaptcha = (window as any).grecaptcha;
+    const token: string = await grecaptcha.execute(siteKey, { action });
+
+    if (!token) {
+      throw new Error('RECAPTCHA_UNAVAILABLE: Google devolvio un token vacio');
     }
 
-    const ready = await this.waitForReady();
-    if (!ready) {
-      console.warn('reCAPTCHA no se cargo en tiempo esperado');
-      return '';
+    return token;
+  }
+};
+```
+
+### 10.11 `frontend/src/composables/usePolling.ts`
+
+```typescript
+import { ref, Ref } from 'vue';
+
+interface PollingResult {
+  transactionState: string;
+  [key: string]: unknown;
+}
+
+interface UsePollingReturn {
+  isPolling: Ref<boolean>;
+  attempts: Ref<number>;
+  start: (
+    checkFn: () => Promise<PollingResult>,
+    onResult?: (result: PollingResult) => void,
+    onError?: (error: Error) => void
+  ) => Promise<PollingResult>;
+  stop: () => void;
+}
+
+export function usePolling(): UsePollingReturn {
+  const isPolling: Ref<boolean> = ref(false);
+  const attempts: Ref<number> = ref(0);
+
+  const INTERVAL_MS: number = parseInt(import.meta.env.VITE_POLLING_INTERVAL_MS || '180000', 10);
+  const MAX_ATTEMPTS: number = parseInt(import.meta.env.VITE_MAX_POLLING_ATTEMPTS || '10', 10);
+
+  // CORRECCION: se guarda el timer y el resolve de la espera para poder
+  // cancelarlos al instante desde stop(). Antes, stop() ponia isPolling=false
+  // pero si estabamos en medio del await de INTERVAL_MS (hasta 3 min), el
+  // bucle no reaccionaba hasta que ese timer terminara.
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let wakeUp: (() => void) | null = null;
+
+  function clearWait(): void {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    wakeUp = null;
+  }
+
+  async function start(
+    checkFn: () => Promise<PollingResult>,
+    onResult?: (result: PollingResult) => void,
+    onError?: (error: Error) => void
+  ): Promise<PollingResult> {
+    if (isPolling.value) return { transactionState: 'ALREADY_POLLING' };
+    isPolling.value = true;
+    attempts.value = 0;
+
+    while (isPolling.value && attempts.value < MAX_ATTEMPTS) {
+      try {
+        attempts.value++;
+        const result: PollingResult = await checkFn();
+        onResult?.(result);
+
+        if (['OK', 'NOT_AUTHORIZED', 'FAILED'].includes(result.transactionState)) {
+          isPolling.value = false;
+          return result;
+        }
+      } catch (error) {
+        onError?.(error as Error);
+      }
+
+      if (isPolling.value && attempts.value < MAX_ATTEMPTS) {
+        await new Promise<void>((resolve) => {
+          wakeUp = resolve;
+          timer = setTimeout(resolve, INTERVAL_MS);
+        });
+        clearWait();
+      }
+    }
+
+    isPolling.value = false;
+    return { transactionState: 'TIMEOUT' };
+  }
+
+  function stop(): void {
+    isPolling.value = false;
+    // Corta la espera en curso de inmediato (no espera a que venza el timer).
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (wakeUp) {
+      wakeUp();
+      wakeUp = null;
+    }
+  }
+
+  return { isPolling, attempts, start, stop };
+}
+```
+
+### 10.12 `frontend/src/composables/useReCaptcha.ts`
+
+```typescript
+import { ref, Ref } from 'vue';
+import recaptchaService from '../services/recaptcha.service';
+
+interface UseReCaptchaReturn {
+  init: () => Promise<void>;
+  execute: (action?: string) => Promise<string>;
+  initialized: Ref<boolean>;
+  loading: Ref<boolean>;
+}
+
+export function useReCaptcha(): UseReCaptchaReturn {
+  const initialized: Ref<boolean> = ref(false);
+  const loading: Ref<boolean> = ref(false);
+
+  async function init(): Promise<void> {
+    if (initialized.value) return;
+    loading.value = true;
+    try {
+      recaptchaService.init();
+      initialized.value = true;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function execute(action: string = 'pse_payment'): Promise<string> {
+    if (!initialized.value) await init();
+    return await recaptchaService.execute(action);
+  }
+
+  return { init, execute, initialized, loading };
+}
+```
+
+### 10.13 `frontend/src/stores/payment.store.ts`
+
+```typescript
+import { defineStore } from 'pinia';
+import apiService from '../services/api.service';
+
+interface BankItem {
+  financialInstitutionCode: string;
+  financialInstitutionName: string;
+}
+
+interface PaymentState {
+  banks: BankItem[];
+  loading: boolean;
+  error: string | null;
+  transactionResult: Record<string, unknown> | null;
+  transactionStatus: Record<string, unknown> | null;
+  transactionDetailed: Record<string, unknown> | null;
+}
+
+export const usePaymentStore = defineStore('payment', {
+  state: (): PaymentState => ({
+    banks: [],
+    loading: false,
+    error: null,
+    transactionResult: null,
+    transactionStatus: null,
+    transactionDetailed: null
+  }),
+
+  actions: {
+    async fetchBanks(): Promise<void> {
+      this.loading = true;
+      this.error = null;
+      try {
+        const response = await apiService.getBanks();
+        if (response.success) {
+          this.banks = response.data;
+        }
+      } catch (err) {
+        this.error = (err as Error).message || 'Error al cargar bancos';
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async createTransaction(paymentData: Record<string, unknown>): Promise<Record<string, unknown>> {
+      this.loading = true;
+      this.error = null;
+      try {
+        const response = await apiService.createTransaction(paymentData);
+        if (response.success) {
+          this.transactionResult = response as unknown as Record<string, unknown>;
+        }
+        return response as unknown as Record<string, unknown>;
+      } catch (err) {
+        this.error = (err as Error).message || 'Error al crear transaccion';
+        throw err;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async checkStatus(trazabilityCode: string): Promise<Record<string, unknown>> {
+      try {
+        const response = await apiService.getTransactionStatus(trazabilityCode);
+        if (response.success) {
+          this.transactionStatus = response.data;
+        }
+        return response as unknown as Record<string, unknown>;
+      } catch (err) {
+        this.error = (err as Error).message || 'Error al consultar estado';
+        throw err;
+      }
+    },
+
+    async fetchDetailed(trazabilityCode: string): Promise<Record<string, unknown> | undefined> {
+      try {
+        const response = await apiService.getTransactionDetailed(trazabilityCode);
+        if (response.success) {
+          this.transactionDetailed = response.data;
+        }
+        return response as unknown as Record<string, unknown>;
+      } catch (err) {
+        console.warn('Error cargando detalle:', err);
+        return undefined;
+      }
+    },
+
+    reset(): void {
+      this.transactionResult = null;
+      this.transactionStatus = null;
+      this.transactionDetailed = null;
+      this.error = null;
+    }
+  }
+});
+```
+
+### 10.14 `frontend/src/utils/causalRejection.ts`
+
+```typescript
+export const CAUSAL_REJECTION: Record<string, string> = {
+  '00001': 'El usuario abandono la transaccion en el banco',
+  '00002': 'Cuenta embargada',
+  '00003': 'Cuenta inactiva',
+  '00004': 'La cuenta no existe',
+  '00005': 'La cuenta no esta habilitada',
+  '00006': 'La cuenta no ha sido habilitada para pagos',
+  '00007': 'La cuenta esta saldada',
+  '00008': 'Excediste el limite transaccional autorizado por tu banco',
+  '00009': 'El banco no se encuentra disponible',
+  '00010': 'Fallas tecnicas en la Entidad Financiera',
+  '00011': 'Fondos insuficientes',
+  '00012': 'Inconsistencia en los datos de la transaccion',
+  '00013': 'La cuenta esta cancelada',
+  '00015': 'La transaccion no fue concluida en el banco en el tiempo maximo permitido (7 min).',
+  '00016': 'Datos de acceso invalidos en el portal de la Entidad Financiera',
+  '00017': 'No tienes habilitado el servicio de PSE en tu Entidad Financiera',
+  '00024': 'Transaccion rechazada por sospecha de fraude en la Entidad Financiera',
+  '00014': 'El banco no confirmo el estado de la transaccion en el tiempo establecido.',
+  '00018': 'La transaccion fue cambiada de aprobada a rechazada por la Entidad Financiera.',
+  '00019': 'Transaccion declinada por sospecha de fraude (Monitor Plus).',
+  '00020': 'Abandonaste la transaccion al regresar al comercio.',
+  '00021': 'Abandonaste la transaccion al cerrar el navegador.',
+  '00022': 'Tu navegador no es compatible con PSE. Usa Chrome 84+, Edge 18+, Firefox 79+, Opera 69+ o Safari 13.1+.',
+  '00023': 'No presentaste actividad en PSE (TIMEOUT).',
+  '00025': 'Credibanco no confirmo la transaccion.',
+  '00026': 'OTP no informado. Agotaste los reenvios configurados por la Entidad Financiera.',
+  '00027': 'OTP invalida. Verifica el codigo enviado por tu banco.',
+  '10001': 'La transaccion excede el limite asignado a la empresa en PSE.',
+  '10002': 'No se puede conectar a la Entidad Financiera.',
+  '10003': 'La Entidad Financiera no acepto iniciar la transaccion.'
+};
+
+export function getCausalMessage(code: string): string {
+  return CAUSAL_REJECTION[code] || `Causal ${code}`;
+}
+```
+
+### 10.15 `frontend/src/utils/errorMessages.ts`
+
+```typescript
+interface PSEErrorMessages {
+  [key: string]: string;
+}
+
+/**
+ * Mensaje genérico exigido por PSE (Requisito #7) para los errores de creación
+ * de transacción. Todos los códigos de GENERIC_CREATE_ERRORS —y cualquier código
+ * desconocido— se resuelven a este texto.
+ */
+const GENERIC_CREATE_ERROR =
+  'No se pudo crear la transaccion, por favor intente mas tarde o comuniquese con la empresa.';
+
+// Requisito PSE #7: estos códigos deben mostrar SIEMPRE el mensaje genérico.
+const GENERIC_CREATE_ERRORS: string[] = [
+  'FAIL_ENTITYNOTEXISTSORDISABLED',
+  'FAIL_BANKNOTEXISTSORDISABLED',
+  'FAIL_SERVICENOTEXISTSORNOTCONFIGURED',
+  'FAIL_INVALIDAMOUNTORVATAMOUNT',
+  'FAIL_INVALIDAMOUNT',
+  'FAIL_INVALIDSOLICITDATE',
+  'FAIL_CANNOTGETCURRENTCYCLE',
+  'FAIL_ACCESSDENIED',
+  'FAIL_TRANSACTIONNOTALLOWED',
+  'FAIL_INVALIDPARAMETERS',
+  'FAIL_GENERICERROR'
+];
+
+export const PSE_ERROR_MESSAGES: PSEErrorMessages = {
+  SUCCESS: 'Transaccion procesada correctamente.',
+
+  // Requisito PSE #6: texto claro + se ofrecen opciones de contacto (bloque aparte).
+  FAIL_EXCEEDEDLIMIT:
+    'El monto de la transaccion excede los limites establecidos en PSE para la empresa, ' +
+    'por favor comuniquese con la empresa.',
+
+  // Mensaje genérico (Requisito #7)
+  FAIL_GENERICERROR: GENERIC_CREATE_ERROR,
+
+  // Mensajes recomendados (Anexo doc) para códigos NO listados en el #7
+  FAIL_BANKUNREACHEABLE:
+    'La entidad financiera no puede ser contactada para iniciar la transaccion, ' +
+    'por favor seleccione otra o intente mas tarde.',
+  FAIL_DISABLEDUSEREMAIL:
+    'El correo electronico ingresado presenta restricciones. ' +
+    'Por favor verifique o use otro correo de contacto.',
+  FAIL_ERRORINCREDITS:
+    'Ocurrio un error al procesar los creditos. Por favor intente mas tarde.',
+  FAIL_INVALIDTRAZABILITYCODE:
+    'La transaccion aun se esta procesando. Por favor espere unos minutos.',
+  FAIL_TIMEOUT:
+    'El tiempo de espera ha expirado. Por favor intente mas tarde.',
+
+  // Errores del lado cliente (no son respuestas de creación PSE)
+  FAIL_RECAPTCHA:
+    'No se pudo verificar que no eres un robot. Por favor intenta de nuevo.',
+  RECAPTCHA_UNAVAILABLE:
+    'No se pudo inicializar la verificacion de seguridad. Recarga la pagina e intenta de nuevo.',
+  FAIL_RATE_LIMIT:
+    'Demasiadas solicitudes. Por favor intente en un minuto.',
+  FAIL_DOUBLEPAYMENT: 'Verifique el estado de su pago antes de iniciar uno nuevo.',
+  FAIL_VALIDATION: 'Por favor verifica los datos ingresados.'
+};
+
+export function getErrorMessage(code: string): string {
+  if (GENERIC_CREATE_ERRORS.includes(code)) {
+    return GENERIC_CREATE_ERROR;
+  }
+  return PSE_ERROR_MESSAGES[code] || GENERIC_CREATE_ERROR;
+}
+
+/**
+ * Indica si, para el código dado, se deben ofrecer opciones de contacto con la
+ * empresa (Requisitos PSE #6 y #7). Aplica a EXCEEDEDLIMIT, a los errores de
+ * creación de transacción y a cualquier código desconocido; NO a los errores de
+ * cliente (validación, reCAPTCHA, rate limit, doble pago).
+ */
+export function shouldOfferContact(code: string): boolean {
+  const clientSide = [
+    'FAIL_VALIDATION', 'FAIL_RECAPTCHA', 'RECAPTCHA_UNAVAILABLE',
+    'FAIL_RATE_LIMIT', 'FAIL_DOUBLEPAYMENT'
+  ];
+  if (!code) return false;
+  if (clientSide.includes(code)) return false;
+  return true;
+}
+```
+
+### 10.16 `frontend/src/utils/formatters.ts`
+
+```typescript
+export function formatCurrency(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '0';
+  return new Intl.NumberFormat('es-CO', {
+    style: 'currency',
+    currency: 'COP',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0
+  }).format(value);
+}
+
+export function formatDate(isoString: string): string {
+  try {
+    return new Date(isoString).toLocaleString('es-CO', {
+      timeZone: 'America/Bogota',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+  } catch {
+    return isoString;
+  }
+}
+```
+
+### 10.17 `frontend/src/utils/paymentMode.ts`
+
+```typescript
+export const PAYMENT_MODE_LABELS: Record<number, string> = {
+  15: 'Debito en cuenta',
+  50: 'Tarjeta de Credito Visa',
+  51: 'Tarjeta de Credito MasterCard',
+  52: 'Tarjeta de Credito Diners Club',
+  53: 'Tarjeta de Credito Propia de la Entidad Financiera',
+  54: 'Credito Rotativo',
+  55: 'Tarjeta de Credito American Express',
+  56: 'Tarjeta de Credito Propia del Comercio'
+};
+
+export const PAYMENT_ORIGIN_LABELS: Record<number, string> = {
+  3: 'Debito',
+  4: 'Credito'
+};
+
+export function getPaymentModeLabel(code: number): string {
+  return PAYMENT_MODE_LABELS[code] || `Modo ${code}`;
+}
+
+export function getPaymentOriginLabel(code: number): string {
+  return PAYMENT_ORIGIN_LABELS[code] || `Origen ${code}`;
+}
+```
+
+### 10.18 `frontend/src/utils/validators.ts`
+
+```typescript
+export const FORBIDDEN_CHARS_REGEX: RegExp = /[|"]/;
+
+export function validateNoForbiddenChars(field: string, value: string): string | null {
+  if (typeof value === 'string' && FORBIDDEN_CHARS_REGEX.test(value)) {
+    return `El campo "${field}" no puede contener los caracteres "|" ni '"'`;
+  }
+  return null;
+}
+
+export function validateUserTypeCombination(userType: string, identificationType: string): string | null {
+  if (userType === 'person' && identificationType === 'NIT') {
+    return 'Si el tipo de persona es "Persona Natural", el tipo de identificacion no puede ser NIT';
+  }
+  if (userType === 'company' && identificationType !== 'NIT') {
+    return 'Si el tipo de persona es "Empresa", el unico tipo de identificacion valido es NIT';
+  }
+  return null;
+}
+
+interface FormData {
+  bankCode: string;
+  identificationNumber: string;
+  fullName: string;
+  cellphoneNumber: string;
+  email: string;
+  address: string;
+  description: string;
+  amount: number | null;
+  userType: string;
+  identificationType: string;
+  reference1?: string;
+  reference2?: string;
+  reference3?: string;
+}
+
+export interface ValidationErrors {
+  [key: string]: string | undefined;
+}
+
+export function validateForm(data: FormData): ValidationErrors {
+  const errors: ValidationErrors = {};
+
+  if (!data.bankCode) errors.bankCode = 'Selecciona un banco';
+  if (!data.identificationNumber) errors.identificationNumber = 'Requerido';
+  if (!data.fullName) errors.fullName = 'Requerido';
+  if (!data.cellphoneNumber) errors.cellphoneNumber = 'Requerido';
+  if (!data.email) errors.email = 'Requerido';
+  if (!data.address) errors.address = 'Requerida';
+  if (!data.description) errors.description = 'Requerida';
+
+  if (!data.amount || data.amount <= 0) errors.amount = 'El monto debe ser mayor a 0';
+
+  if (data.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email)) {
+    errors.email = 'Email invalido';
+  }
+
+  if (data.cellphoneNumber && !/^\d{10}$/.test(data.cellphoneNumber.replace(/\D/g, ''))) {
+    errors.cellphoneNumber = 'El celular debe tener 10 digitos';
+  }
+
+  const charErrors: (string | null)[] = [
+    validateNoForbiddenChars('description', data.description),
+    validateNoForbiddenChars('reference1', data.reference1 || ''),
+    validateNoForbiddenChars('reference2', data.reference2 || ''),
+    validateNoForbiddenChars('reference3', data.reference3 || '')
+  ].filter(Boolean);
+
+  if (charErrors.length > 0) {
+    errors.forbiddenChars = charErrors[0] || undefined;
+  }
+
+  const userTypeError: string | null = validateUserTypeCombination(data.userType, data.identificationType);
+  if (userTypeError) errors.userType = userTypeError;
+
+  return errors;
+}
+```
+
+### 10.19 `frontend/src/components/BankList.vue`
+
+```vue
+<template>
+  <div class="mb-6">
+    <label class="block text-sm font-medium text-gray-700 mb-2">
+      Banco <span class="text-red-500">*</span>
+    </label>
+    <div v-if="loading" class="flex items-center justify-center py-4">
+      <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+      <span class="ml-2 text-sm text-gray-500">Cargando bancos...</span>
+    </div>
+    <select
+      v-else
+      :value="modelValue"
+      @change="onSelect(($event.target as HTMLSelectElement).value)"
+      class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+      :class="{ 'border-red-500': error }"
+    >
+      <option value="" disabled>Selecciona tu banco</option>
+      <option
+        v-for="bank in banks"
+        :key="bank.financialInstitutionCode"
+        :value="bank.financialInstitutionCode"
+      >
+        {{ bank.financialInstitutionName }}
+      </option>
+    </select>
+    <p v-if="error" class="mt-1 text-xs text-red-600">{{ error }}</p>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { onMounted } from 'vue';
+import { storeToRefs } from 'pinia';
+import { usePaymentStore } from '../stores/payment.store';
+
+defineProps<{
+  modelValue?: string;
+  error?: string;
+}>();
+
+const store = usePaymentStore();
+
+const { loading, banks } = storeToRefs(store);
+
+const emit = defineEmits<{
+  (e: 'update:modelValue', value: string): void;
+}>();
+
+// Emite la selección y persiste el NOMBRE del banco para poder mostrarlo en el
+// comprobante final (Requisito PSE #11), ya que el formulario solo maneja el código.
+function onSelect(code: string): void {
+  emit('update:modelValue', code);
+  const bank = store.banks.find((b) => b.financialInstitutionCode === code);
+  if (bank) {
+    sessionStorage.setItem('pse_bank_name', bank.financialInstitutionName);
+  }
+}
+
+onMounted(() => {
+  if (store.banks.length === 0) {
+    store.fetchBanks();
+  }
+});
+</script>
+```
+
+### 10.20 `frontend/src/components/ErrorAlert.vue`
+
+```vue
+<template>
+  <div v-if="message" class="p-4 rounded-lg" :class="typeClasses">
+    <p class="text-sm flex items-start">
+      <span class="mr-2">{{ icon }}</span>
+      <span>{{ message }}</span>
+    </p>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, ComputedRef } from 'vue';
+
+const props = withDefaults(defineProps<{
+  message?: string;
+  type?: 'error' | 'success' | 'warning' | 'info';
+}>(), {
+  message: '',
+  type: 'error'
+});
+
+const typeClasses: ComputedRef<string> = computed(() => {
+  const classes: Record<string, string> = {
+    error: 'bg-red-50 border border-red-200 text-red-600',
+    success: 'bg-green-50 border border-green-200 text-green-600',
+    warning: 'bg-yellow-50 border border-yellow-200 text-yellow-600',
+    info: 'bg-blue-50 border border-blue-200 text-blue-600'
+  };
+  return classes[props.type] || classes.error;
+});
+
+const icon: ComputedRef<string> = computed(() => {
+  const icons: Record<string, string> = {
+    error: '\u274C',
+    success: '\u2705',
+    warning: '\u26A0\uFE0F',
+    info: '\u2139\uFE0F'
+  };
+  return icons[props.type] || icons.error;
+});
+</script>
+```
+
+### 10.21 `frontend/src/components/LoadingSpinner.vue`
+
+```vue
+<template>
+  <div class="flex items-center justify-center py-8">
+    <div class="text-center">
+      <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+      <p v-if="message" class="mt-4 text-gray-600">{{ message }}</p>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+withDefaults(defineProps<{
+  message?: string;
+}>(), {
+  message: 'Cargando...'
+});
+</script>
+```
+
+### 10.22 `frontend/src/components/PaymentForm.vue`
+
+```vue
+<template>
+  <form @submit.prevent="handleSubmit" class="space-y-6">
+    <!-- Tipo de Persona -->
+    <div>
+      <label class="block text-sm font-medium text-gray-700 mb-2">
+        Tipo de persona <span class="text-red-500">*</span>
+      </label>
+      <div class="grid grid-cols-2 gap-3">
+        <button
+          type="button"
+          @click="setUserType('person')"
+          class="py-2 px-4 border rounded-lg transition-colors"
+          :class="form.userType === 'person'
+            ? 'bg-blue-50 border-blue-500 text-blue-700'
+            : 'border-gray-300 text-gray-700 hover:bg-gray-50'"
+        >
+          <span class="block font-medium">Persona Natural</span>
+          <span class="text-xs text-gray-500">Cedula de ciudadania</span>
+        </button>
+        <button
+          type="button"
+          @click="setUserType('company')"
+          class="py-2 px-4 border rounded-lg transition-colors"
+          :class="form.userType === 'company'
+            ? 'bg-blue-50 border-blue-500 text-blue-700'
+            : 'border-gray-300 text-gray-700 hover:bg-gray-50'"
+        >
+          <span class="block font-medium">Empresa</span>
+          <span class="text-xs text-gray-500">NIT</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Tipo y Numero de Identificacion -->
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <label for="identificationType" class="block text-sm font-medium text-gray-700 mb-1">
+          Tipo de identificacion <span class="text-red-500">*</span>
+        </label>
+        <select
+          id="identificationType"
+          v-model="form.identificationType"
+          class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+          :class="{ 'border-red-500': fieldErrors.identificationType }"
+          required
+        >
+          <option v-if="form.userType === 'person'" value="CedulaDeCiudadania">Cedula de Ciudadania</option>
+          <option v-if="form.userType === 'person'" value="CedulaDeExtranjeria">Cedula de Extranjeria</option>
+          <option v-if="form.userType === 'person'" value="Pasaporte">Pasaporte</option>
+          <option v-if="form.userType === 'person'" value="TarjetaDeIdentidad">Tarjeta de Identidad</option>
+          <option v-if="form.userType === 'person'" value="DocumentoDeIdentificacionExtranjero">Doc. de Identificacion Extranjero</option>
+          <option v-if="form.userType === 'company'" value="NIT">NIT</option>
+        </select>
+        <p v-if="fieldErrors.identificationType" class="mt-1 text-xs text-red-600">
+          {{ fieldErrors.identificationType }}
+        </p>
+      </div>
+      <div>
+        <label for="identificationNumber" class="block text-sm font-medium text-gray-700 mb-1">
+          Numero de identificacion <span class="text-red-500">*</span>
+        </label>
+        <input
+          id="identificationNumber"
+          v-model="form.identificationNumber"
+          type="text"
+          class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+          :class="{ 'border-red-500': fieldErrors.identificationNumber }"
+          placeholder="Ej: 1234567890"
+          required
+        />
+        <p v-if="fieldErrors.identificationNumber" class="mt-1 text-xs text-red-600">
+          {{ fieldErrors.identificationNumber }}
+        </p>
+      </div>
+    </div>
+
+    <!-- Nombre completo -->
+    <div>
+      <label for="fullName" class="block text-sm font-medium text-gray-700 mb-1">
+        Nombre completo <span class="text-red-500">*</span>
+      </label>
+      <input
+        id="fullName"
+        v-model="form.fullName"
+        type="text"
+        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+        :class="{ 'border-red-500': fieldErrors.fullName }"
+        placeholder="Ej: Juan Perez Gomez"
+        required
+      />
+      <p v-if="fieldErrors.fullName" class="mt-1 text-xs text-red-600">{{ fieldErrors.fullName }}</p>
+    </div>
+
+    <!-- Celular y Email -->
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <label for="cellphoneNumber" class="block text-sm font-medium text-gray-700 mb-1">
+          Celular <span class="text-red-500">*</span>
+        </label>
+        <input
+          id="cellphoneNumber"
+          v-model="form.cellphoneNumber"
+          type="tel"
+          class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+          :class="{ 'border-red-500': fieldErrors.cellphoneNumber }"
+          placeholder="3001234567"
+          maxlength="10"
+          required
+        />
+        <p v-if="fieldErrors.cellphoneNumber" class="mt-1 text-xs text-red-600">
+          {{ fieldErrors.cellphoneNumber }}
+        </p>
+      </div>
+      <div>
+        <label for="email" class="block text-sm font-medium text-gray-700 mb-1">
+          Correo electronico <span class="text-red-500">*</span>
+        </label>
+        <input
+          id="email"
+          v-model="form.email"
+          type="email"
+          class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+          :class="{ 'border-red-500': fieldErrors.email }"
+          placeholder="ejemplo@correo.com"
+          required
+        />
+        <p v-if="fieldErrors.email" class="mt-1 text-xs text-red-600">{{ fieldErrors.email }}</p>
+      </div>
+    </div>
+
+    <!-- Direccion -->
+    <div>
+      <label for="address" class="block text-sm font-medium text-gray-700 mb-1">
+        Direccion <span class="text-red-500">*</span>
+      </label>
+      <input
+        id="address"
+        v-model="form.address"
+        type="text"
+        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+        :class="{ 'border-red-500': fieldErrors.address }"
+        placeholder="Calle Falsa 123"
+        required
+      />
+      <p v-if="fieldErrors.address" class="mt-1 text-xs text-red-600">{{ fieldErrors.address }}</p>
+    </div>
+
+    <!-- Monto -->
+    <div>
+      <label for="amount" class="block text-sm font-medium text-gray-700 mb-1">
+        Valor a pagar <span class="text-red-500">*</span>
+      </label>
+      <div class="relative">
+        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-500 font-medium">$</span>
+        <input
+          id="amount"
+          v-model.number="form.amount"
+          type="number"
+          step="0.01"
+          min="0.01"
+          class="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+          :class="{ 'border-red-500': fieldErrors.amount }"
+          placeholder="0.00"
+          required
+        />
+      </div>
+      <p v-if="fieldErrors.amount" class="mt-1 text-xs text-red-600">{{ fieldErrors.amount }}</p>
+    </div>
+
+    <!-- Descripcion -->
+    <div>
+      <label for="description" class="block text-sm font-medium text-gray-700 mb-1">
+        Descripcion del pago <span class="text-red-500">*</span>
+      </label>
+      <input
+        id="description"
+        v-model="form.description"
+        type="text"
+        @input="validateForbiddenChars"
+        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+        :class="{ 'border-red-500': fieldErrors.description || fieldErrors.forbiddenChars }"
+        placeholder="Ej: Pago de calificacion de invalidez"
+        maxlength="80"
+        required
+      />
+      <div class="flex justify-between mt-1">
+        <p class="text-xs text-red-600">{{ fieldErrors.description || fieldErrors.forbiddenChars }}</p>
+        <p class="text-xs text-gray-500">
+          {{ form.description ? 80 - form.description.length : 80 }} caracteres restantes
+        </p>
+      </div>
+    </div>
+
+    <!-- Lista de bancos -->
+    <BankList v-model="form.bankCode" :error="fieldErrors.bankCode" />
+
+    <!-- Badge reCAPTCHA -->
+    <p class="text-xs text-gray-500 text-center">
+      Este sitio esta protegido por reCAPTCHA y se aplican la
+      <a href="https://policies.google.com/privacy" class="underline" target="_blank">Politica de privacidad</a> y
+      <a href="https://policies.google.com/terms" class="underline" target="_blank">Terminos del servicio</a> de Google.
+    </p>
+
+    <!-- Botones -->
+    <div class="flex flex-col sm:flex-row gap-4 pt-4">
+      <button
+        type="submit"
+        :disabled="loading || !isFormValid"
+        class="flex-1 py-3 px-6 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+      >
+        <span v-if="loading">
+          <svg class="inline animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          {{ loadingMessage }}
+        </span>
+        <span v-else>Debito Bancario PSE</span>
+      </button>
+      <button
+        type="button"
+        @click="$emit('cancel')"
+        :disabled="loading"
+        class="py-3 px-6 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
+      >
+        Cancelar
+      </button>
+    </div>
+
+    <!-- Errores -->
+    <div v-if="error" class="p-4 bg-red-50 border border-red-200 rounded-lg">
+      <p class="text-sm text-red-600 flex items-start">
+        <span class="mr-2">&#10060;</span>
+        <span>{{ error }}</span>
+      </p>
+    </div>
+  </form>
+</template>
+
+<script setup lang="ts">
+import { ref, reactive, computed, watch, Ref, ComputedRef } from 'vue';
+import BankList from './BankList.vue';
+import apiService from '../services/api.service';
+import { useReCaptcha } from '../composables/useReCaptcha';
+import { validateForm, validateNoForbiddenChars, ValidationErrors } from '../utils/validators';
+import { getErrorMessage } from '../utils/errorMessages';
+
+interface SuccessPayload {
+  trazabilityCode: string;
+  pseURL: string;
+  ticketId: string;
+  formData: FormData;
+}
+
+interface ErrorPayload {
+  code: string;
+  message: string;
+}
+
+interface FormData {
+  bankCode: string;
+  identificationNumber: string;
+  fullName: string;
+  cellphoneNumber: string;
+  email: string;
+  address: string;
+  description: string;
+  amount: number | null;
+  userType: string;
+  identificationType: string;
+  reference1?: string;
+  reference2?: string;
+  reference3?: string;
+  serviceCode?: string;
+  vat?: number;
+}
+
+interface ApiResponse {
+  success: boolean;
+  data?: {
+    trazabilityCode: string;
+    ticketId: string;
+    pseURL: string;
+  };
+  message?: string;
+  code?: string;
+}
+
+const emit = defineEmits<{
+  (e: 'success', payload: SuccessPayload): void;
+  (e: 'cancel'): void;
+  (e: 'error', payload: ErrorPayload): void;
+  (e: 'loading', isLoading: boolean): void;
+}>();
+
+const loading: Ref<boolean> = ref(false);
+const error: Ref<string> = ref('');
+const fieldErrors: Ref<ValidationErrors> = ref({});
+const loadingMessage: Ref<string> = ref('Procesando...');
+
+const { init: initRecaptcha } = useReCaptcha();
+initRecaptcha();
+
+const form: FormData = reactive({
+  userType: 'person',
+  identificationType: 'CedulaDeCiudadania',
+  identificationNumber: '',
+  fullName: '',
+  cellphoneNumber: '',
+  email: '',
+  address: '',
+  amount: null,
+  description: '',
+  bankCode: '',
+  serviceCode: import.meta.env.VITE_PSE_SERVICE_CODE || '',
+  vat: 0,
+  reference1: '',
+  reference2: '',
+  reference3: ''
+});
+
+const isFormValid: ComputedRef<boolean> = computed(() => {
+  return !!(
+    form.bankCode &&
+    form.identificationNumber?.trim() &&
+    form.fullName?.trim() &&
+    form.cellphoneNumber?.trim() &&
+    form.email?.trim() &&
+    form.address?.trim() &&
+    form.amount && form.amount > 0 &&
+    form.description?.trim()
+  );
+});
+
+function setUserType(type: string): void {
+  form.userType = type;
+  if (type === 'company') {
+    form.identificationType = 'NIT';
+  } else {
+    form.identificationType = 'CedulaDeCiudadania';
+  }
+}
+
+function validateForbiddenChars(): void {
+  const err: string | null = validateNoForbiddenChars('description', form.description);
+  if (err) {
+    fieldErrors.value.forbiddenChars = err;
+  } else {
+    delete fieldErrors.value.forbiddenChars;
+  }
+}
+
+watch(() => form.cellphoneNumber, (newVal: string) => {
+  form.cellphoneNumber = String(newVal).replace(/\D/g, '').slice(0, 10);
+});
+
+watch(loading, (newVal: boolean) => {
+  loadingMessage.value = newVal ? 'Creando transaccion...' : 'Procesando...';
+  emit('loading', newVal);
+});
+
+async function handleSubmit(): Promise<void> {
+  error.value = '';
+  fieldErrors.value = {};
+
+  const errors: ValidationErrors = validateForm(form);
+  if (Object.keys(errors).length > 0) {
+    fieldErrors.value = errors;
+    error.value = 'Por favor completa todos los campos requeridos correctamente';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    return;
+  }
+
+  if (!form.serviceCode) {
+    error.value = 'Error de configuracion: Codigo de servicio no definido';
+    return;
+  }
+
+  loading.value = true;
+
+  try {
+    const response: ApiResponse = await apiService.createTransaction(form) as ApiResponse;
+
+    if (response.success && response.data) {
+      sessionStorage.setItem('pse_trazability_code', response.data.trazabilityCode);
+      sessionStorage.setItem('pse_ticket_id', response.data.ticketId);
+      sessionStorage.setItem('pse_form_data', JSON.stringify(form));
+
+      emit('success', {
+        trazabilityCode: response.data.trazabilityCode,
+        pseURL: response.data.pseURL,
+        ticketId: response.data.ticketId,
+        formData: { ...form }
+      });
+    } else {
+      const message: string = response.message || getErrorMessage(response.code || '');
+      error.value = message;
+      emit('error', { code: response.code || '', message });
+    }
+  } catch (err) {
+    const e = err as { message?: string; code?: string };
+    const message: string = e.message || getErrorMessage(e.code || '');
+    error.value = message;
+    emit('error', { code: e.code || '', message });
+  } finally {
+    loading.value = false;
+  }
+}
+</script>
+```
+
+### 10.23 `frontend/src/components/PaymentSummary.vue`
+
+```vue
+<template>
+  <div v-if="loading" class="flex items-center justify-center py-8">
+    <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+  </div>
+  <div v-else class="bg-white border border-gray-200 rounded-lg p-4">
+    <h3 class="font-medium text-gray-700 mb-3">Resumen del pago</h3>
+    <div class="space-y-2 text-sm">
+      <div class="flex justify-between">
+        <span class="text-gray-500">Banco:</span>
+        <span>{{ bankName }}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-gray-500">Valor:</span>
+        <span class="font-bold">${{ formatCurrency(amount) }}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-gray-500">Descripcion:</span>
+        <span>{{ description }}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-gray-500">Tipo:</span>
+        <span>{{ userType === 'person' ? 'Persona Natural' : 'Empresa' }}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-gray-500">Identificacion:</span>
+        <span>{{ identificationNumber }}</span>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, ComputedRef } from 'vue';
+import { storeToRefs } from 'pinia';
+import { usePaymentStore } from '../stores/payment.store';
+import { formatCurrency } from '../utils/formatters';
+
+interface BankItem {
+  financialInstitutionCode: string;
+  financialInstitutionName: string;
+}
+
+const props = withDefaults(defineProps<{
+  bankCode?: string;
+  amount?: number;
+  description?: string;
+  userType?: string;
+  identificationNumber?: string;
+}>(), {
+  bankCode: '',
+  amount: 0,
+  description: '',
+  userType: 'person',
+  identificationNumber: ''
+});
+
+const store = usePaymentStore();
+const { loading } = storeToRefs(store);
+
+const bankName: ComputedRef<string> = computed(() => {
+  const bank: BankItem | undefined = store.banks.find(
+    (b: BankItem) => b.financialInstitutionCode === props.bankCode
+  );
+  return bank ? bank.financialInstitutionName : props.bankCode;
+});
+</script>
+```
+
+### 10.24 `frontend/src/components/RejectionReason.vue`
+
+```vue
+<template>
+  <div v-if="causeRejection" class="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg text-left">
+    <div class="flex items-start">
+      <div class="flex-shrink-0">
+        <span class="text-2xl">&#9888;&#65039;</span>
+      </div>
+      <div class="ml-3 flex-1">
+        <h4 class="text-sm font-semibold text-red-800">Por que fue rechazada?</h4>
+        <p class="text-sm text-red-700 mt-1">
+          <strong>Causal {{ causeRejection }}:</strong> {{ friendlyCausal }}
+        </p>
+        <p v-if="rejectionDescription" class="text-xs text-red-600 mt-2">
+          {{ rejectionDescription }}
+        </p>
+        <p v-if="stateDescription" class="text-xs text-red-600 mt-1">
+          Estado: {{ stateDescription }}
+        </p>
+        <div class="mt-3 flex gap-2">
+          <button
+            @click="$emit('retry')"
+            class="text-xs px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700"
+          >
+            Intentar de nuevo
+          </button>
+          <a
+            href="mailto:facturacion@juntaatlantico.co"
+            class="text-xs px-3 py-1 border border-red-300 text-red-700 rounded hover:bg-red-100"
+          >
+            Contactar soporte
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, ComputedRef } from 'vue';
+import { getCausalMessage } from '../utils/causalRejection';
+
+const props = withDefaults(defineProps<{
+  causeRejection?: string | null;
+  rejectionDescription?: string | null;
+  stateDescription?: string | null;
+}>(), {
+  causeRejection: null,
+  rejectionDescription: null,
+  stateDescription: null
+});
+
+defineEmits<{
+  (e: 'retry'): void;
+}>();
+
+const friendlyCausal: ComputedRef<string> = computed(() =>
+  props.causeRejection ? getCausalMessage(props.causeRejection) : ''
+);
+</script>
+```
+
+### 10.25 `frontend/src/views/Checkout.vue`
+
+```vue
+<template>
+  <div class="min-h-screen bg-gray-50 py-12 px-4 sm:flex sm:items-center sm:justify-center">
+    <div class="max-w-lg mx-auto">
+      <!-- Header -->
+      <div class="text-center mb-8">
+        <img src="/junta-atlantico-logo.svg" alt="Junta Atlantico" class="h-16 mx-auto mb-4" />
+        <h1 class="text-2xl font-bold text-gray-900">Pago PSE</h1>
+        <p class="text-gray-600 mt-1">Junta Regional de Calificacion de Invalidez del Atlantico</p>
+      </div>
+
+      <!-- Formulario -->
+      <div class="bg-white rounded-xl shadow-lg overflow-hidden p-6">
+        <PaymentForm
+          @success="handleSuccess"
+          @error="handleError"
+          @cancel="handleCancel"
+          @loading="handleLoading"
+        />
+      </div>
+
+      <!-- Footer -->
+      <p class="text-center text-xs text-gray-500 mt-6">
+        Debito Bancario PSE - Junta Atlantico S.A.S.
+      </p>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { useRouter } from 'vue-router';
+import PaymentForm from '../components/PaymentForm.vue';
+
+interface SuccessPayload {
+  trazabilityCode: string;
+  pseURL: string;
+}
+
+interface ErrorPayload {
+  code: string;
+  message: string;
+}
+
+const router = useRouter();
+
+function handleSuccess({ trazabilityCode, pseURL }: SuccessPayload): void {
+  if (pseURL) {
+    window.location.href = pseURL;
+  } else {
+    router.push({
+      name: 'PaymentReturn',
+      query: { trazabilityCode }
+    });
+  }
+}
+
+function handleError({ code, message }: ErrorPayload): void {
+  console.error('Error en pago:', code, message);
+}
+
+function handleCancel(): void {
+  router.push('/');
+}
+
+function handleLoading(_isLoading: boolean): void {
+  // Optional: handle global loading state
+}
+</script>
+```
+
+### 10.26 `frontend/src/views/PaymentReturn.vue`
+
+```vue
+<template>
+  <div class="min-h-screen bg-gray-50 py-12 px-4 sm:flex sm:items-center sm:justify-center">
+    <div class="max-w-md mx-auto bg-white rounded-xl shadow-lg overflow-hidden">
+      <div class="p-6 text-center">
+        <!-- Header con logo -->
+        <img src="/junta-atlantico-logo.svg" alt="Junta Atlantico" class="h-12 mx-auto mb-4" />
+
+        <!-- Loading -->
+        <div v-if="loading" class="py-12">
+          <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+          <p class="mt-4 text-gray-600">Verificando el estado de tu pago...</p>
+        </div>
+
+        <!-- Error -->
+        <div v-else-if="error" class="py-8">
+          <div class="text-red-600 text-6xl mb-4">&#10060;</div>
+          <h2 class="text-xl font-bold text-gray-900">Error</h2>
+          <p class="text-gray-600 mt-2">{{ error }}</p>
+          <button
+            @click="goToCheckout"
+            class="mt-4 py-2 px-6 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+          >
+            Volver al inicio
+          </button>
+        </div>
+
+        <!-- Resultado (4 estados): encabezado por estado + comprobante unico -->
+        <div v-else-if="transactionState" class="py-6">
+          <!-- Encabezado por estado -->
+          <div v-if="transactionState === 'OK'">
+            <div class="text-green-600 text-6xl mb-2">&#9989;</div>
+            <h2 class="text-2xl font-bold text-gray-900">Pago aprobado</h2>
+            <p class="text-gray-600 mt-1">Tu transaccion se ha completado exitosamente.</p>
+          </div>
+          <div v-else-if="transactionState === 'PENDING'">
+            <div class="text-yellow-600 text-6xl mb-2">&#9203;</div>
+            <h2 class="text-xl font-bold text-gray-900">Pago pendiente</h2>
+            <p class="text-gray-600 mt-1">Tu pago esta siendo procesado por tu entidad financiera.</p>
+          </div>
+          <div v-else-if="['NOT_AUTHORIZED', 'FAILED'].includes(transactionState)">
+            <div class="text-red-600 text-6xl mb-2">&#10060;</div>
+            <h2 class="text-xl font-bold text-gray-900">
+              {{ transactionState === 'NOT_AUTHORIZED' ? 'Pago rechazado' : 'Pago fallido' }}
+            </h2>
+            <p class="text-gray-600 mt-1">
+              {{ transactionState === 'NOT_AUTHORIZED'
+                 ? 'La transaccion no fue autorizada por tu banco.'
+                 : 'Ocurrio un error al procesar tu pago.' }}
+            </p>
+          </div>
+
+          <!-- Comprobante de pago (Requisito PSE #11): se muestra en los 4 estados -->
+          <div class="mt-6 p-4 bg-gray-50 rounded-lg text-left">
+            <h3 class="font-medium text-gray-700 mb-3">Comprobante de pago</h3>
+            <div class="space-y-2 text-sm">
+              <div class="flex justify-between" v-if="receipt.nit">
+                <span class="text-gray-500">NIT:</span>
+                <span>{{ receipt.nit }}</span>
+              </div>
+              <div class="flex justify-between" v-if="receipt.companyName">
+                <span class="text-gray-500">Razon social:</span>
+                <span class="text-right">{{ receipt.companyName }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-gray-500">Estado:</span>
+                <span class="font-semibold">{{ receipt.state }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-gray-500">Banco:</span>
+                <span class="text-right">{{ receipt.bank }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-gray-500">CUS:</span>
+                <span class="font-mono">{{ receipt.cus }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-gray-500">Ticket ID:</span>
+                <span class="font-mono">{{ receipt.ticketId }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-gray-500">Fecha:</span>
+                <span>{{ receipt.date }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-gray-500">Valor:</span>
+                <span class="font-bold">${{ receipt.amount }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-gray-500">Descripcion:</span>
+                <span class="text-right">{{ receipt.description }}</span>
+              </div>
+              <div class="flex justify-between" v-if="paymentModeLabel">
+                <span class="text-gray-500">Medio de pago:</span>
+                <span>{{ paymentModeLabel }}</span>
+              </div>
+              <div class="flex justify-between" v-if="paymentOriginLabel">
+                <span class="text-gray-500">Tipo:</span>
+                <span>{{ paymentOriginLabel }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- PENDING: texto literal ACH + contacto (Requisito PSE #11) -->
+          <div v-if="transactionState === 'PENDING'"
+               class="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-left">
+            <p class="text-sm text-yellow-800 font-medium">
+              Por favor verificar si el debito fue realizado en el Banco.
+            </p>
+            <p v-if="hasContact" class="text-sm text-yellow-700 mt-2">
+              Si tienes dudas, comunicate con nosotros:
+              <span v-if="CONTACT_PHONE"><br />Telefono: {{ CONTACT_PHONE }}</span>
+              <span v-if="CONTACT_EMAIL"><br />Correo: {{ CONTACT_EMAIL }}</span>
+            </p>
+          </div>
+
+          <!-- OK -->
+          <p v-else-if="transactionState === 'OK'" class="mt-4 text-xs text-gray-500">
+            Recibiras el soporte de pago en tu correo electronico.
+          </p>
+
+          <!-- Rechazada / Fallida: causal + contacto -->
+          <template v-else-if="['NOT_AUTHORIZED', 'FAILED'].includes(transactionState)">
+            <RejectionReason
+              :cause-rejection="detailed?.causeRejection"
+              :rejection-description="detailed?.rejectionDescription"
+              :state-description="detailed?.stateDescription"
+              @retry="goToCheckout"
+            />
+            <div v-if="hasContact" class="mt-3 p-3 bg-gray-50 rounded-lg text-left text-sm text-gray-600">
+              Para mayor informacion comunicate con nosotros:
+              <span v-if="CONTACT_PHONE"><br />Telefono: {{ CONTACT_PHONE }}</span>
+              <span v-if="CONTACT_EMAIL"><br />Correo: {{ CONTACT_EMAIL }}</span>
+            </div>
+          </template>
+        </div>
+
+        <!-- Boton de volver -->
+        <div v-if="!loading && transactionState" class="mt-6 pt-6 border-t">
+          <button
+            @click="goToCheckout"
+            class="py-2 px-6 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+          >
+            Volver al inicio
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, onMounted, onUnmounted, computed, Ref, ComputedRef } from 'vue';
+import { useRouter } from 'vue-router';
+import apiService from '../services/api.service';
+import RejectionReason from '../components/RejectionReason.vue';
+import { formatCurrency } from '../utils/formatters';
+import { getPaymentModeLabel, getPaymentOriginLabel } from '../utils/paymentMode';
+import { usePolling } from '../composables/usePolling';
+
+interface TransactionData {
+  trazabilityCode?: string;
+  ticketId?: string;
+  transactionValue?: number;
+  paymentMode?: number;
+  paymentOrigin?: number;
+  bankProcessDate?: string;
+  transactionState?: string;
+  financialInstitutionName?: string;
+  paymentDescription?: string;
+  serviceNIT?: string;
+  serviceName?: string;
+}
+
+interface DetailedData {
+  causeRejection?: string;
+  rejectionDescription?: string;
+  stateDescription?: string;
+}
+
+interface PollingResult {
+  transactionState: string;
+}
+
+const router = useRouter();
+const loading: Ref<boolean> = ref(true);
+const error: Ref<string> = ref('');
+const transaction: Ref<TransactionData> = ref({});
+const transactionState: Ref<string> = ref('');
+const detailed: Ref<DetailedData | null> = ref(null);
+
+// Datos del comercio y contacto (Requisitos PSE #6, #7, #11)
+const COMPANY_NIT: string = import.meta.env.VITE_COMPANY_NIT || '';
+const COMPANY_NAME: string = import.meta.env.VITE_COMPANY_NAME || 'Junta Atlantico S.A.S.';
+const CONTACT_PHONE: string = import.meta.env.VITE_CONTACT_PHONE || '';
+const CONTACT_EMAIL: string = import.meta.env.VITE_CONTACT_EMAIL || '';
+
+// Snapshot del formulario capturado al montar, ANTES de que clearSession()
+// borre la PII: permite mostrar descripción y banco en el comprobante.
+const formSnapshot = ref<{ description?: string }>({});
+const bankNameSnapshot = ref<string>('');
+
+const { start: startPolling, stop: stopPolling } = usePolling();
+
+const paymentModeLabel: ComputedRef<string> = computed(() =>
+  transaction.value.paymentMode ? getPaymentModeLabel(transaction.value.paymentMode) : ''
+);
+const paymentOriginLabel: ComputedRef<string> = computed(() =>
+  transaction.value.paymentOrigin ? getPaymentOriginLabel(transaction.value.paymentOrigin) : ''
+);
+
+const STATE_LABELS: Record<string, string> = {
+  OK: 'Aprobada',
+  PENDING: 'Pendiente',
+  NOT_AUTHORIZED: 'Rechazada',
+  FAILED: 'Fallida'
+};
+const stateLabel: ComputedRef<string> = computed(
+  () => STATE_LABELS[transactionState.value] || transactionState.value || '—'
+);
+
+// Comprobante unificado (Requisito PSE #11): NIT, Razón Social, Estado, Banco,
+// CUS, TicketId, Fecha, Valor y Descripción. Se muestra en los 4 estados.
+const receipt = computed(() => ({
+  nit: COMPANY_NIT || transaction.value.serviceNIT || '',
+  companyName: COMPANY_NAME || transaction.value.serviceName || '',
+  state: stateLabel.value,
+  bank: transaction.value.financialInstitutionName || bankNameSnapshot.value || '—',
+  cus: transaction.value.trazabilityCode || '—',
+  ticketId: transaction.value.ticketId || '—',
+  date: transaction.value.bankProcessDate ? formatDate(transaction.value.bankProcessDate) : '—',
+  amount: typeof transaction.value.transactionValue === 'number'
+    ? formatCurrency(transaction.value.transactionValue) : '—',
+  description: transaction.value.paymentDescription || formSnapshot.value.description || '—'
+}));
+
+const hasContact: ComputedRef<boolean> = computed(() => !!(CONTACT_PHONE || CONTACT_EMAIL));
+
+function formatDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString('es-CO', { timeZone: 'America/Bogota' });
+  } catch {
+    return iso;
+  }
+}
+
+// Limpia toda la informacion de la transaccion del navegador, incluyendo
+// pse_form_data (nombre, email, celular, direccion, identificacion).
+function clearSession(): void {
+  sessionStorage.removeItem('pse_trazability_code');
+  sessionStorage.removeItem('pse_ticket_id');
+  sessionStorage.removeItem('pse_form_data');
+  sessionStorage.removeItem('pse_bank_name');
+}
+
+// CORRECCION: detener el polling al desmontar la vista. Antes, si el usuario
+// navegaba/recargaba durante el polling, el bucle seguia corriendo en segundo
+// plano (hasta 30 min) disparando llamadas al backend.
+onUnmounted(() => {
+  stopPolling();
+});
+
+onMounted(async () => {
+  // Capturar datos para el comprobante ANTES de cualquier limpieza de sesión.
+  try {
+    const raw = sessionStorage.getItem('pse_form_data');
+    if (raw) {
+      const fd = JSON.parse(raw) as { description?: string };
+      formSnapshot.value = { description: fd.description };
+    }
+  } catch {
+    /* ignore */
+  }
+  bankNameSnapshot.value = sessionStorage.getItem('pse_bank_name') || '';
+
+  let trazabilityCode: string | null = new URLSearchParams(window.location.search).get('trazabilityCode');
+  if (!trazabilityCode) {
+    trazabilityCode = sessionStorage.getItem('pse_trazability_code');
+  }
+
+  if (!trazabilityCode) {
+    error.value = 'No se encontro informacion de la transaccion';
+    loading.value = false;
+    return;
+  }
+
+  await checkTransactionWithPolling(trazabilityCode);
+});
+
+async function checkTransactionWithPolling(trazabilityCode: string): Promise<void> {
+  try {
+    loading.value = true;
+
+    const result: PollingResult = await startPolling(
+      async () => {
+        const r = await apiService.getTransactionStatus(trazabilityCode);
+        if (r.success) {
+          transaction.value = r.data as TransactionData;
+          transactionState.value = (r.data as TransactionData).transactionState || '';
+        }
+        return { transactionState: transactionState.value, ...r.data };
+      },
+      (res: PollingResult) => {
+        if (res.transactionState !== 'PENDING') {
+          loadDetailedIfNeeded(trazabilityCode);
+        }
+      },
+      (err: Error) => {
+        error.value = err.message || 'Error al consultar el estado';
+      }
+    );
+
+    if (result?.transactionState === 'TIMEOUT') {
+      error.value = 'La transaccion esta tardando mas de lo esperado. Verifica el estado mas tarde.';
+    }
+  } catch (err) {
+    error.value = (err as Error).message || 'Error al consultar el estado del pago';
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function loadDetailedIfNeeded(trazabilityCode: string): Promise<void> {
+  if (transactionState.value === 'OK') {
+    clearSession();
+    return;
+  }
+
+  try {
+    const r = await apiService.getTransactionDetailed(trazabilityCode);
+    if (r.success) {
+      detailed.value = r.data as DetailedData;
+    }
+  } catch (err) {
+    console.warn('No se pudo cargar detalle:', err);
+  }
+
+  // Estados terminales no exitosos: se borra al menos la PII del navegador.
+  if (['NOT_AUTHORIZED', 'FAILED'].includes(transactionState.value)) {
+    clearSession();
+  }
+}
+
+function goToCheckout(): void {
+  stopPolling();
+  router.push('/checkout');
+}
+</script>
+```
+
+### 10.27 `scripts/build-zips.mjs`
+
+```javascript
+#!/usr/bin/env node
+/**
+ * scripts/build-zips.mjs
+ *
+ * Genera deploy/backend.zip y deploy/frontend.zip para subir a Hostinger.
+ * Funciona en Windows, Mac y Linux sin comandos externos (no usa "zip").
+ *
+ * USO — abrir terminal en la RAIZ del proyecto y ejecutar:
+ *   node scripts/build-zips.mjs
+ *
+ * SALIDA en la RAIZ del proyecto:
+ *   deploy/
+ *     backend.zip    <- subir a Hostinger (Web App Node.js)
+ *     frontend.zip   <- subir a Hostinger (Web App estatico)
+ */
+
+import { execSync }                              from 'node:child_process';
+import { existsSync, rmSync, mkdirSync,
+         readdirSync, statSync,
+         readFileSync, writeFileSync }           from 'node:fs';
+import { resolve, dirname, join, relative, sep } from 'node:path';
+import { fileURLToPath }                         from 'node:url';
+
+const ROOT     = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const BACKEND  = resolve(ROOT, 'backend');
+const FRONTEND = resolve(ROOT, 'frontend');
+const OUT      = resolve(ROOT, 'deploy');
+
+// ─── Utilidades ──────────────────────────────────────────────────────────────
+
+function step(msg) {
+  console.log(`\n${'─'.repeat(58)}\n  ${msg}\n${'─'.repeat(58)}`);
+}
+
+function run(cmd, cwd = ROOT) {
+  console.log(`\n> ${cmd}`);
+  execSync(cmd, { stdio: 'inherit', cwd });
+}
+
+// ─── Generador de ZIP en puro Node.js (sin "zip", sin librerias) ─────────────
+
+function u16(n) { const b = Buffer.alloc(2); b.writeUInt16LE(n); return b; }
+function u32(n) { const b = Buffer.alloc(4); b.writeUInt32LE(n); return b; }
+
+const CRC_TABLE = (() => {
+  const t = new Int32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c;
+  }
+  return t;
+})();
+
+function crc32(buf) {
+  let c = -1;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ -1) >>> 0;
+}
+
+function dosDateTime() {
+  const d = new Date();
+  return {
+    time: (d.getHours() << 11) | (d.getMinutes() << 5) | Math.floor(d.getSeconds() / 2),
+    date: ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate(),
+  };
+}
+
+/**
+ * Construye un archivo ZIP en memoria.
+ * @param {Array<{name:string, data:Buffer}>} entries
+ * @returns {Buffer}
+ */
+function buildZip(entries) {
+  const locals  = [];
+  const central = [];
+  let   offset  = 0;
+  const dt      = dosDateTime();
+
+  for (const entry of entries) {
+    const nameBytes = Buffer.from(entry.name, 'utf8');
+    const data      = entry.data;
+    const crc       = crc32(data);
+    const size      = data.length;
+
+    const local = Buffer.concat([
+      Buffer.from([0x50,0x4B,0x03,0x04]),
+      u16(20), u16(0), u16(0),            // version, flags, compression (stored)
+      u16(dt.time), u16(dt.date),
+      u32(crc), u32(size), u32(size),     // crc, compressed size, uncompressed size
+      u16(nameBytes.length), u16(0),      // name length, extra length
+      nameBytes,
+      data,
+    ]);
+
+    const cdir = Buffer.concat([
+      Buffer.from([0x50,0x4B,0x01,0x02]),
+      u16(20), u16(20), u16(0), u16(0),
+      u16(dt.time), u16(dt.date),
+      u32(crc), u32(size), u32(size),
+      u16(nameBytes.length), u16(0), u16(0), u16(0), u16(0),
+      u32(0), u32(offset),
+      nameBytes,
+    ]);
+
+    locals.push(local);
+    central.push(cdir);
+    offset += local.length;
+  }
+
+  const centralBuf  = Buffer.concat(central);
+  const eocd = Buffer.concat([
+    Buffer.from([0x50,0x4B,0x05,0x06]),
+    u16(0), u16(0),
+    u16(entries.length), u16(entries.length),
+    u32(centralBuf.length), u32(offset),
+    u16(0),
+  ]);
+
+  return Buffer.concat([...locals, centralBuf, eocd]);
+}
+
+/**
+ * Lee todos los archivos de una carpeta recursivamente.
+ * @param {string} baseDir  carpeta raíz (para calcular el path relativo dentro del zip)
+ * @param {string} dir      carpeta actual
+ * @param {string[]} skip   nombres de carpeta/archivo a omitir
+ * @returns {Array<{name:string, data:Buffer}>}
+ */
+function collectFiles(baseDir, dir, skip = []) {
+  const result = [];
+  for (const name of readdirSync(dir)) {
+    if (skip.includes(name)) continue;
+    const full = join(dir, name);
+    if (statSync(full).isDirectory()) {
+      result.push(...collectFiles(baseDir, full, skip));
+    } else {
+      // El estándar ZIP exige forward slash en los paths
+      const relName = relative(baseDir, full).split(sep).join('/');
+      result.push({ name: relName, data: readFileSync(full) });
+    }
+  }
+  return result;
+}
+
+// ─── MAIN ────────────────────────────────────────────────────────────────────
+
+// Limpiar y crear carpeta de salida
+if (existsSync(OUT)) rmSync(OUT, { recursive: true });
+mkdirSync(OUT, { recursive: true });
+
+// ── 1. Compilar TypeScript del backend ───────────────────────────────────────
+step('1/4  Compilando TypeScript (backend)');
+
+if (!existsSync(resolve(BACKEND, 'node_modules'))) {
+  console.error('\nERROR: falta instalar las devDependencies del backend.');
+  console.error('Ejecuta:  cd backend && npm install\n');
+  process.exit(1);
+}
+
+const DIST = resolve(BACKEND, 'dist');
+if (existsSync(DIST)) rmSync(DIST, { recursive: true });
+run('npx tsc -p tsconfig.build.json', BACKEND);
+
+if (!existsSync(resolve(DIST, 'backend', 'server.js'))) {
+  console.error('\nERROR: la compilación no generó dist/backend/server.js\n');
+  process.exit(1);
+}
+console.log('\n✓ TypeScript compilado →', DIST);
+
+// ── 2. Generar backend.zip ───────────────────────────────────────────────────
+step('2/4  Generando backend.zip');
+
+const backendEntries = [
+  ...collectFiles(BACKEND, DIST),           // todo el JS compilado
+  {                                          // package.json (con start correcto)
+    name: 'package.json',
+    data: readFileSync(resolve(BACKEND, 'package.json')),
+  },
+];
+
+const backendZipBuf  = buildZip(backendEntries);
+const backendZipPath = resolve(OUT, 'backend.zip');
+writeFileSync(backendZipPath, backendZipBuf);
+console.log(`✓ backend.zip  (${(backendZipBuf.length / 1024).toFixed(0)} KB)  →  deploy\\backend.zip`);
+
+// ── 3. Compilar frontend (Vite) ──────────────────────────────────────────────
+step('3/4  Compilando Vue/Vite (frontend)');
+
+if (!existsSync(resolve(FRONTEND, 'node_modules'))) {
+  console.error('\nERROR: falta instalar las dependencias del frontend.');
+  console.error('Ejecuta:  cd frontend && npm install\n');
+  process.exit(1);
+}
+
+const FDIST = resolve(FRONTEND, 'dist');
+if (existsSync(FDIST)) rmSync(FDIST, { recursive: true });
+run('npx vite build', FRONTEND);
+
+if (!existsSync(resolve(FDIST, 'index.html'))) {
+  console.error('\nERROR: Vite no generó index.html\n');
+  process.exit(1);
+}
+console.log('\n✓ Vite build OK →', FDIST);
+
+// ── 4. Generar frontend.zip ──────────────────────────────────────────────────
+step('4/4  Generando frontend.zip');
+
+const frontendEntries = collectFiles(FDIST, FDIST);
+const frontendZipBuf  = buildZip(frontendEntries);
+const frontendZipPath = resolve(OUT, 'frontend.zip');
+writeFileSync(frontendZipPath, frontendZipBuf);
+console.log(`✓ frontend.zip (${(frontendZipBuf.length / 1024).toFixed(0)} KB)  →  deploy\\frontend.zip`);
+
+// ── Resumen ──────────────────────────────────────────────────────────────────
+console.log(`
+${'═'.repeat(58)}
+  ✅  Listo. Archivos generados en la carpeta deploy\\
+${'═'.repeat(58)}
+
+  📦  deploy\\backend.zip
+      → Subir a Hostinger (Web App Node.js - api.juntaatlantico.co)
+      → Build command : dejar VACÍO
+      → Start command : node dist/backend/server.js
+      → Node version  : 20.x o 22.x
+
+  🌐  deploy\\frontend.zip
+      → Subir a Hostinger (Web App estático - pse.juntaatlantico.co)
+      → Descomprimir en la raíz del dominio
+
+${'═'.repeat(58)}
+`);
+```
+
+---
+
     }
 
     try {
@@ -5509,6 +7637,10 @@ Las causales más relevantes (frontend debe mostrarlas cuando `causeRejection` l
 - [ ] `components/RejectionReason.vue` (NUEVO v2.0)
 - [ ] `views/PaymentReturn.vue` (con causal de rechazo)
 - [ ] `main.ts` sin plugin; reCAPTCHA v3 cargado por `services/recaptcha.service.ts` (`?render=<SITE_KEY>` + `grecaptcha.ready()`)
+- [ ] `trust proxy = 1` configurado en `server.ts` (requerido por Hostinger)
+- [ ] `app.listen()` sin guarda `if (require.main === module)` (requerido por Hostinger)
+- [ ] `tsconfig.build.json` separado para compilar sin tests
+- [ ] Script `scripts/build-zips.mjs` para generar los zips de despliegue
 
 ### 14.4 Pruebas en certificación
 
@@ -5647,133 +7779,295 @@ El equipo de desarrollo de Junta Atlántico puede usar este documento como **esp
 **Basado en:** `Prompt Generado.md` v1.0 + `ANALISIS_AJUSTES_PSE_v17_a_v21.md`
 **Instructivo ACH:** Versión 21 (octubre 2025)
 
-## 16. REGISTRO DE CAMBIOS v2.1 — Ajustes post-implementación
+## 16. DESPLIEGUE EN HOSTINGER
 
-Esta versión documenta el estado **real y funcional** tras la implementación y
-depuración del sistema. Todos los cambios fueron verificados (typecheck en cero
-errores y 37/37 pruebas del backend en verde).
+> Arquitectura **Opción B**: dos subdominios independientes desplegados como
+> archivos `.zip` generados localmente. No hay compilación TypeScript en el servidor.
 
-### 16.1 Lenguaje
-- Todo el código fuente (backend y frontend) está en **TypeScript**. Los tipos
-  compartidos viven en `shared/types/`. Las secciones 8, 9 y 10 reflejan los
-  archivos reales `.ts`/`.vue`, no el pseudocódigo `.js` de la v2.0.
+### 16.1 Arquitectura en producción
 
-### 16.2 reCAPTCHA v3 (frontend) — corrección de bug bloqueante
-- **Problema:** el plugin `vue-recaptcha-v3` cargaba `api.js` con
-  `?render=explicit`, lo que impedía que `grecaptcha` registrara el cliente v3
-  del site key. El servicio manual, al detectar ese script, no cargaba el suyo
-  con `?render=<SITE_KEY>`. Resultado: `grecaptcha.execute()` lanzaba
-  *"Invalid site key or not loaded in api.js"* → token vacío → `FAIL_RECAPTCHA`.
-- **Solución:**
-  - Se eliminó el plugin `vue-recaptcha-v3` (de `main.ts`, `package.json` y el stack).
-  - `recaptcha.service.ts` carga `https://www.google.com/recaptcha/api.js?render=<SITE_KEY>`
-    con un `<script>` identificado por ID, espera con `grecaptcha.ready()` y
-    **lanza** error en vez de devolver `''`.
-  - `api.service.ts` falla rápido con código `RECAPTCHA_UNAVAILABLE` en vez de
-    enviar un token vacío al backend.
+```
+Usuario (navegador)
+    │
+    ├── GET pse.juntaatlantico.co        → Hostinger sitio estático HTML
+    │       HTML + JS + CSS (Vue/Vite)       (sin Node.js, sin proceso)
+    │
+    └── POST api.juntaatlantico.co/api/pse → Hostinger Web App Node.js
+            Express + dist/ compilado          (proceso persistente)
+                    │
+                    └── PSE ACH Colombia (apicer.pse.com.co)
+```
 
-### 16.3 Backend
-- **`tsconfig.json`:** `ignoreDeprecations` corregido de `"6.0"` a `"5.0"`
-  (valor inválido para TypeScript 5.x que rompía `tsc`/`npm run build`).
-- **`validation/schemas.ts`:** se agregó validación de **máx. 2 decimales** en
-  `amount` y `vat` (matriz de validaciones §7.1 #13) y se añadió `path` a los
-  `.refine()` cruzados para que el error indique el campo (`amount`,
-  `identificationType`, `description`) en lugar de un mensaje sin campo.
-- **`middleware/securityHeaders.middleware.ts` + `server.ts`:** el CORS y
-  `validateOrigin` ahora leen los orígenes desde `ALLOWED_ORIGIN` mediante
-  `getAllowedOrigins()` (antes eran listas fijas y la variable no se usaba). Se
-  añadió la opción `STRICT_ORIGIN=true` para rechazar peticiones sin cabecera
-  Origin/Referer (endurecimiento Sección 11 ACH).
+### 16.2 Subdominios
 
-### 16.4 Frontend
-- **`composables/usePolling.ts`:** `stop()` ahora cancela el `setTimeout` en
-  curso (con `clearTimeout` + resolución inmediata de la espera). Antes, detener
-  el polling no interrumpía una espera de hasta 3 minutos ya iniciada.
-- **`views/PaymentReturn.vue`:** se agregó `onUnmounted(() => stopPolling())`
-  para evitar que el bucle de polling (hasta 30 min) siguiera corriendo tras
-  salir de la vista, y se limpia `sessionStorage` (incluida la PII de
-  `pse_form_data`) en **todos** los estados terminales (`OK`, `NOT_AUTHORIZED`,
-  `FAILED`), no solo en `OK`.
-- **`package.json`:** eliminada la dependencia muerta `vue-recaptcha-v3`.
+| Subdominio | Tipo | Contenido |
+|---|---|---|
+| `pse.juntaatlantico.co` | Sitio estático HTML | Build de Vite (`frontend/dist/`) |
+| `api.juntaatlantico.co` | Web App Node.js | `backend/dist/` compilado |
 
-### 16.5 Pendientes (dependen de terceros)
-- **Credenciales PSE:** `PSE_CLIENT_ID`, `PSE_CLIENT_SECRET`, `PSE_API_KEY` y
-  `PSE_SERVICE_CODE` deben reemplazar los placeholders con los valores reales
-  emitidos por ACH Colombia. Sin ellos, el token OAuth falla con
-  `invalid_client` y la lista de bancos cae a datos mock.
-- **Formato del token OAuth:** el endpoint de token es Apigee; si con las
-  credenciales reales persiste `invalid_client`, evaluar enviar
-  `client_id`/`client_secret` como `application/x-www-form-urlencoded` en
-  `token.service.ts` (hoy se envían como JSON).
-- **NIT del beneficiario:** confirmar que `PSE_ENTITY_CODE` sea efectivamente el
-  NIT de Junta Atlántico (§7.3). Si difieren, usar una variable separada.
+### 16.3 Generar los zips de despliegue
 
-### 16.6 Ajustes de certificación PSE-ACH (14 puntos)
+Desde la **raíz del proyecto** en Windows/Mac/Linux (no usa el comando `zip` del sistema):
 
-Trabajo realizado para cubrir la lista de verificación de certificación de PSE-ACH.
+```bash
+# Primera vez o cuando cambien dependencias:
+cd backend && npm install && cd ..
+cd frontend && npm install && cd ..
 
-- **#1 Botón/logo PSE:** el botón muestra el logo de PSE (`/pse-logo.svg`) + texto
-  "Debito Bancario PSE" y una aclaración de que el pago se realiza a través del
-  Proveedor de Servicios Electrónicos PSE. No usa la palabra "tarjeta".
-  *(Verificar que el SVG sea el logo oficial actualizado.)*
-- **#4 GetBankListNF ≤ 1 vez/día:** nuevo `bankList.service.ts` con caché diaria
-  (`BANK_LIST_CACHE_TTL_MS`, 24 h). Ya no se llama a PSE por cada transacción.
-- **#7 Mensajes de error genéricos:** tanto `frontend/src/utils/errorMessages.ts`
-  como `backend/utils/errorMessages.ts` mapean los códigos del requisito #7 (y
-  cualquier código desconocido) al texto genérico "No se pudo crear la
-  transacción…". `FAIL_EXCEEDEDLIMIT` conserva su texto (#6). Se agregó
-  `shouldOfferContact()` y un bloque de contacto en el formulario. Ambos lados
-  quedan alineados, así el texto correcto se muestra venga del backend
-  (`response.message`) o del frontend.
-- **#8 Orden alfabético de bancos:** el `bankList.service.ts` ordena por nombre
-  (`localeCompare`, es). Redirección en la misma pestaña, sin banco por defecto y
-  botón deshabilitado ya estaban implementados.
-- **#11 Comprobante completo:** `PaymentReturn.vue` muestra NIT, Razón Social,
-  Estado, Banco, CUS, TicketId, Fecha, Valor y Descripción en los 4 estados;
-  texto literal + contacto en PENDING; causal + contacto en Rechazada/Fallida.
-  `BankList.vue` persiste el nombre del banco para el comprobante.
-- **#13 Referencias obligatorias:** las 3 referencias de `CreateTransactionPaymentNF`
-  ya no van vacías (mapeo documentado en `pse.service.ts`).
-  *(Confirmar los valores exactos contra el Manual de Buenas Prácticas.)*
+# Generar los dos zips:
+node scripts/build-zips.mjs
+```
 
-Variables `.env` nuevas: `BANK_LIST_CACHE_TTL_MS`, `BANK_LIST_FALLBACK_TTL_MS`
-(backend); `VITE_COMPANY_NIT`, `VITE_COMPANY_NAME`, `VITE_CONTACT_PHONE`,
-`VITE_CONTACT_EMAIL` (frontend).
+Resultado:
+```
+deploy/
+  backend.zip    ← subir a Hostinger (Web App Node.js)
+  frontend.zip   ← subir a Hostinger (sitio estático HTML)
+```
 
-#### Matriz de cumplimiento
+### 16.4 Configuración de la Web App del backend en Hostinger
 
-| # | Requisito                                         | Estado                       |
-|---|-----------                                        |--------                       |
-| 1 | Botón/logo PSE; no usar "tarjeta"                 | ✅ (verificar logo oficial)   |
-| 2 | Controles perimetrales de seguridad               | ✅                           |
-| 3 | Validación userType / identificationType          | ✅ |
-| 4 | URLs nuevas + GetBankListNF ≤ 1 vez/día           | ✅ |
-| 5 | GetTransactionInformationNF cada 3 min (PENDING)  | ✅ |
-| 6 | FAIL_EXCEEDEDLIMIT: texto + contacto              | ✅ |
-| 7 | Otros FAIL → mensaje genérico + contacto          | ✅ |
-| 8 | Redirección misma pestaña / orden / botón         | ✅ |
-| 9 | Campos de beneficiario (Desarrollo Independiente) | ✅ (verificar casing/NIT) |
-| 10 | Registro primera vez (términos)                  | ℹ️ Lado PSE |
-| 11 | Comprobante completo (4 estados)                 | ✅ |
-| 12 | Control de pago único (duplicidad)               | ✅ |
-| 13 | 3 referencias según tipo de entidad              | ⚠️ Confirmar valores con manual |
-| 14 | Flujo PSE Avanza recurrente + OTP Banka          | ⚠️ Prueba con credenciales |
+| Campo | Valor |
+|---|---|
+| Build command | *(dejar vacío)* |
+| Start command | `node dist/backend/server.js` |
+| Node version | `20.x` o `22.x` |
+| Branch | `master` |
 
-### 16.7 Configuración de TypeScript: editor vs build
+### 16.5 Variables de entorno del backend en Hostinger
 
-Para que el editor reconozca los tipos de Jest (`describe`/`test`/`expect`) en
-los archivos `*.test.ts` sin que los tests terminen en el build de producción,
-se separó la configuración:
+> Las variables `VITE_*` del frontend **NO van aquí** — se hornean en el build.
+> Solo el backend tiene variables de entorno en el servidor.
 
-- **`backend/tsconfig.json`** (editor + `ts-jest` + `typecheck`): incluye los
-  tests y declara `"types": ["node", "jest"]`.
-- **`backend/tsconfig.build.json`** (NUEVO, usado por `npm run build`): extiende
-  el anterior pero **excluye** `tests` y `**/*.test.ts`, y usa
-  `"types": ["node"]` para que el código de producción no dependa de los
-  globales de Jest.
-- `package.json`: el script `build` ahora es `tsc -p tsconfig.build.json`.
+```bash
+NODE_ENV=production
+PSE_ENV=cert                        # cert=certificación, production=producción real
+ALLOWED_ORIGIN=https://pse.juntaatlantico.co
+STRICT_ORIGIN=true
+PSE_RETURN_URL=https://pse.juntaatlantico.co/retorno-pago
+PSE_COMPANY_NAME=JUNTA ATLANTICO S.A.S.
 
-Tras aplicar esto, reiniciar el servidor de TypeScript del editor
-("TypeScript: Restart TS Server") para que tome la nueva configuración.
+# Claves de cifrado AES-256-GCM (generar UNA SOLA VEZ y guardar de forma segura)
+# node -e "const c=require('crypto'); console.log(c.randomBytes(32).toString('base64'))"
+PSE_ENCRYPTION_KEY=<base64 32 bytes>
+PSE_ENCRYPTION_IV=<base64 12 bytes>
+DB_ENCRYPTION_KEY=<base64 32 bytes>
+
+# reCAPTCHA v3
+RECAPTCHA_SECRET=<secret key del registro v3>
+RECAPTCHA_SCORE_MIN=0.5
+
+# Credenciales PSE (ACH Colombia — pendiente recibir)
+PSE_CLIENT_ID=<de ACH Colombia>
+PSE_CLIENT_SECRET=<de ACH Colombia>
+PSE_API_KEY=<de ACH Colombia>
+PSE_SERVICE_CODE=<de ACH Colombia, máx 10 chars>
+PSE_ENTITY_CODE=<NIT de la Junta>
+PSE_TOKEN_URL=https://apicer.pse.com.co/oauth/client_credential/accesstoken?grant_type=client_credentials
+PSE_API_BASE_URL=https://apicer.pse.com.co/v2/psewebapinf/api
+
+# Cache de bancos
+BANK_LIST_CACHE_TTL_MS=86400000
+BANK_LIST_FALLBACK_TTL_MS=300000
+
+# Seguridad
+RATE_LIMIT_WINDOW_MS=60000
+RATE_LIMIT_MAX_REQ=10
+LOG_LEVEL=info
+```
+
+### 16.6 Variables del frontend (`.env.production`)
+
+Se configuran en el archivo local **antes** de compilar. No van en Hostinger.
+
+```bash
+VITE_API_URL=https://api.juntaatlantico.co/api/pse
+VITE_RECAPTCHA_SITE_KEY=6LfeA1otAAAAAO3tR5zTId6BtIIeoY3T8ytO7Lin
+VITE_PSE_SERVICE_CODE=<de ACH Colombia>
+VITE_COMPANY_NIT=<NIT de la Junta>
+VITE_COMPANY_NAME=JUNTA ATLANTICO S.A.S.
+VITE_CONTACT_PHONE=<telefono de contacto>
+VITE_CONTACT_EMAIL=<correo de contacto>
+VITE_POLLING_INTERVAL_MS=180000
+VITE_MAX_POLLING_ATTEMPTS=10
+```
+
+### 16.7 Cómo subir el frontend (sitio estático)
+
+El frontend compilado (HTML/CSS/JS puro) **no necesita Node.js**. Se sube directamente
+por el **File Manager** de Hostinger:
+
+1. Panel Hostinger → File Manager
+2. Navegar a la carpeta del subdominio `pse.juntaatlantico.co`
+3. Subir `deploy/frontend.zip` y descomprimir en la raíz
+4. Verificar que `index.html` quede en la raíz de la carpeta
+
+### 16.8 Flujo completo de un redeploy
+
+```
+1. Hacer cambios en el código (backend o frontend)
+2. Commitear y pushear a GitHub
+3. Desde la raíz del proyecto:
+   node scripts/build-zips.mjs
+4. Si cambió el BACKEND:
+   - Subir deploy/backend.zip a Hostinger (Web App Node.js)
+   - Reiniciar la app en Hostinger
+5. Si cambió el FRONTEND:
+   - Subir deploy/frontend.zip por File Manager
+   - Descomprimir en la raíz del subdominio (reemplaza los anteriores)
+```
+
+---
+
+## 17. REGISTRO DE CAMBIOS v3.0 — Despliegue en producción
+
+Esta versión documenta el estado real tras el despliegue exitoso en Hostinger.
+Todos los cambios fueron verificados en producción con pruebas reales.
+
+### 17.1 Arquitectura de despliegue (Opción B)
+
+Se eligió la **Opción B** (dos subdominios independientes) sobre la Opción A
+(Express sirviendo la SPA) por tener **menor impacto en el código** — el proyecto
+ya estaba construido con frontend y backend separados.
+
+- `pse.juntaatlantico.co` → sitio estático HTML (build de Vite, sin Node.js)
+- `api.juntaatlantico.co` → Web App Node.js (Express, `dist/` precompilado)
+
+### 17.2 Correcciones de producción en `backend/server.ts`
+
+**`app.set('trust proxy', 1)`** — Hostinger usa Nginx como proxy inverso. Sin esta
+configuración, `express-rate-limit` identificaba a todos los usuarios como la misma
+IP (la del proxy interno), rompiendo el rate limit por usuario. El valor `1` indica
+un nivel de proxy de confianza. Genera el warning en logs:
+`"X-Forwarded-For header is set but trust proxy is false"`.
+
+**`app.listen()` sin guarda** — Se eliminó `if (require.main === module)` que envolvía
+`app.listen()`. Hostinger no arranca el servidor como módulo principal, por lo que
+esa condición nunca se cumplía y el proceso nunca llamaba a `listen()`. Hostinger
+reportaba: `"App did not call listen() within 3 seconds"`.
+
+### 17.3 Estrategia de despliegue con zips precompilados
+
+**Problema:** Hostinger ejecuta `npm install --production` durante el build, lo que
+excluye `devDependencies`. Como `typescript` está en `devDependencies`, `tsc` no
+estaba disponible y el build fallaba con:
+`"typescript package was not properly installed"`.
+
+**Solución:** Compilar TypeScript **localmente** (donde sí hay devDeps) e incluir
+el `dist/` ya compilado en el zip. El servidor solo hace `npm install --production`
+(instala `express`, `axios`, etc.) y arranca con `node dist/backend/server.js`.
+
+**`scripts/build-zips.mjs`** — Script cross-platform (Windows/Mac/Linux) que:
+- Compila TypeScript con `npx tsc -p tsconfig.build.json`
+- Compila el frontend con `npx vite build`
+- Genera los zips usando módulos nativos de Node.js (sin el comando `zip` del sistema)
+- No requiere instalar nada adicional
+
+El `build` script del `backend/package.json` quedó como `echo "Build omitido..."` 
+para que Hostinger no intente compilar nada al subir el zip.
+
+### 17.4 `tsconfig.build.json` (separación editor vs build)
+
+Problema: el editor (VS Code) mostraba `describe`/`test`/`expect` como desconocidos
+porque `tsconfig.json` excluía la carpeta `tests`. Solución:
+
+- `tsconfig.json` → incluye tests, declara `"types": ["node", "jest"]` (para el editor y `ts-jest`)
+- `tsconfig.build.json` → excluye tests y usa `"types": ["node"]` (solo para producción)
+- `npm run build` usa `tsconfig.build.json`
+
+### 17.5 Variables de entorno críticas para arrancar
+
+Aunque no haya credenciales PSE, estas variables son **obligatorias** para que el
+proceso levante (el servicio de cifrado las valida al iniciar):
+
+```bash
+PSE_ENCRYPTION_KEY   # base64 de 32 bytes exactos
+PSE_ENCRYPTION_IV    # base64 de 12 bytes exactos
+DB_ENCRYPTION_KEY    # base64 de 32 bytes exactos
+```
+
+Generar con Node.js:
+```bash
+node -e "const c=require('crypto'); console.log('KEY:', c.randomBytes(32).toString('base64')); console.log('IV:', c.randomBytes(12).toString('base64')); console.log('DB:', c.randomBytes(32).toString('base64'));"
+```
+
+**`PORT`** — NO configurar en Hostinger. Hostinger inyecta el puerto automáticamente.
+El fallback `parseInt(process.env.PORT || '3000', 10)` en `server.ts` cubre el desarrollo local.
+
+### 17.6 Frontend como sitio estático HTML
+
+Las variables `VITE_*` **no son variables de entorno del servidor**. Vite las
+procesa en el build y las "hornea" directamente en el JavaScript compilado:
+
+```typescript
+// En el código fuente:
+const url = import.meta.env.VITE_API_URL
+// En el JS compilado (dist/assets/index-xxx.js):
+const url = "https://api.juntaatlantico.co/api/pse"
+```
+
+Consecuencia: si cambia la URL del backend (u otra variable `VITE_*`), hay que
+regenerar el zip del frontend y volver a subirlo. No basta con cambiar algo en Hostinger.
+
+El frontend compilado es HTML/CSS/JS puro — se desplegó como **sitio estático HTML**
+en Hostinger (File Manager → descomprimir en la raíz del subdominio), sin ningún
+proceso Node.js, sin consumo de recursos del servidor.
+
+### 17.7 Corrección de EOL (line endings) para Windows
+
+Archivo `.gitattributes` agregado a la raíz del repo para normalizar saltos de
+línea a LF en el repositorio, evitando el warning `"LF will be replaced by CRLF"`
+en `git add` en Windows y los diffs falsos en equipos mixtos.
+
+### 17.8 Pruebas de verificación en producción (resultados)
+
+Ejecutadas con PowerShell contra `https://api.juntaatlantico.co`:
+
+| Prueba | Comando | Resultado |
+|---|---|---|
+| Servidor vivo + bancos mock | `GET /api/pse/banks` | ✅ 200 + lista A-Z + `"source":"mock"` |
+| 404 en JSON | `GET /api/pse/noexiste` | ✅ `{"code":"NOT_FOUND"}` |
+| reCAPTCHA bloqueando | `POST /api/pse/transaction` sin token | ✅ `{"code":"FAIL_RECAPTCHA"}` |
+| Rate limit por IP | 12× `GET /api/pse/banks` | ✅ Sin warning en logs (globalLimiter: 60/min) |
+| CORS | `Origin: pse.juntaatlantico.co` | ✅ `Access-Control-Allow-Origin` correcto |
+| Sin errores en logs | Tiempo real Hostinger | ✅ Sin warnings ni errores |
+
+**Nota sobre el rate limit:** `/api/pse/banks` usa `globalLimiter` (60 req/min) —
+los 12 requests pasaron correctamente. El `pseTransactionLimiter` (10 req/min)
+protege el `POST /api/pse/transaction` (verificable cuando haya tokens reCAPTCHA válidos).
+
+### 17.9 Pendientes para ir a producción real
+
+1. **Credenciales PSE de ACH Colombia** (`PSE_CLIENT_ID`, `PSE_CLIENT_SECRET`,
+   `PSE_API_KEY`, `PSE_SERVICE_CODE`) — configurar en variables de entorno de
+   Hostinger y reiniciar el backend. Sin tocar el código.
+2. **Confirmar referencias P13** — verificar el mapeo de `referenceNumber1/2/3`
+   contra el Manual de Buenas Prácticas para "Desarrollo Independiente".
+3. **Prueba P6** — transacción con monto superior a los límites PSE para verificar
+   el mensaje de `FAIL_EXCEEDEDLIMIT`.
+4. **Prueba P7** — usar `serviceCode` inválido (5555, 6666 o 7777) para verificar
+   `FAIL_SERVICENOTEXISTSORNOTCONFIGURED`.
+5. **Prueba P14** — flujo PSE Avanza recurrente con banco Banka + OTP.
+6. **NIT del beneficiario** — confirmar que `PSE_ENTITY_CODE` sea el NIT real de
+   la Junta Atlántico (§7.3 del instructivo ACH).
+
+### 17.10 Matriz de cumplimiento actualizada
+
+| # | Requisito | Estado |
+|---|---|---|
+| 1 | Botón/logo PSE; no usar "tarjeta" | ✅ (verificar logo oficial en pantalla) |
+| 2 | Controles perimetrales de seguridad | ✅ |
+| 3 | Validación userType / identificationType | ✅ |
+| 4 | GetBankListNF ≤ 1 vez/día | ✅ |
+| 5 | GetTransactionInformationNF cada 3 min | ✅ |
+| 6 | FAIL_EXCEEDEDLIMIT: texto + contacto | ✅ (pendiente prueba con monto real) |
+| 7 | Errores genéricos + contacto (front y back) | ✅ |
+| 8 | Redirección misma pestaña / orden A-Z / botón | ✅ |
+| 9 | Campos de beneficiario | ✅ (verificar NIT real) |
+| 10 | Registro primera vez (términos) | ℹ️ Lado PSE |
+| 11 | Comprobante completo (4 estados) | ✅ |
+| 12 | Control de pago único | ✅ |
+| 13 | 3 referencias obligatorias | ⚠️ Confirmar con Manual de Buenas Prácticas |
+| 14 | Flujo PSE Avanza + OTP Banka | ⚠️ Prueba con credenciales reales |
 
 ---
