@@ -1,5 +1,63 @@
 <template>
   <form @submit.prevent="handleSubmit" class="space-y-6">
+
+    <!-- ══════════════════════════════════════════════════════ -->
+    <!-- DATOS DEL PACIENTE (persona calificada)               -->
+    <!-- Se envían a PSE como referenceNumber1 y 2 (Req. #13) -->
+    <!-- Pueden ser distintos a los datos del pagador          -->
+    <!-- ══════════════════════════════════════════════════════ -->
+    <div class="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+      <h3 class="text-sm font-semibold text-blue-800 mb-3">
+        Datos del paciente a calificar
+      </h3>
+      <div class="grid grid-cols-3 gap-4">
+        <div class="col-span-1">
+          <label for="patientId" class="block text-sm font-medium text-gray-700 mb-1">
+            No.Identificación <span class="text-red-500">*</span>
+          </label>
+          <input
+            id="patientId"
+            v-model="form.reference1"
+            type="text"
+            class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            :class="{ 'border-red-500': fieldErrors.reference1 }"
+            placeholder="Ej: 1234567890"
+            maxlength="80"
+            required
+          />
+          <p v-if="fieldErrors.reference1" class="mt-1 text-xs text-red-600">
+            {{ fieldErrors.reference1 }}
+          </p>
+        </div>
+        <div class="col-span-2">
+          <label for="patientName" class="block text-sm font-medium text-gray-700 mb-1">
+            Nombre completo <span class="text-red-500">*</span>
+          </label>
+          <input
+            id="patientName"
+            v-model="form.reference2"
+            type="text"
+            class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            :class="{ 'border-red-500': fieldErrors.reference2 }"
+            placeholder="Ej: Maria Garcia Lopez"
+            maxlength="80"
+            required
+          />
+          <p v-if="fieldErrors.reference2" class="mt-1 text-xs text-red-600">
+            {{ fieldErrors.reference2 }}
+          </p>
+        </div>
+      </div>
+      <p class="text-xs text-blue-600 mt-2">
+        Ingrese los datos de la persona cuya calificacion de invalidez se esta pagando.
+        Estos datos pueden ser diferentes a los del pagador.
+      </p>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════ -->
+    <!-- DATOS DEL PAGADOR                                     -->
+    <!-- ══════════════════════════════════════════════════════ -->
+
     <!-- Tipo de Persona -->
     <div>
       <label class="block text-sm font-medium text-gray-700 mb-2">
@@ -268,9 +326,11 @@ interface FormData {
   amount: number | null;
   userType: string;
   identificationType: string;
-  reference1?: string;
-  reference2?: string;
-  reference3?: string;
+  // Datos del PACIENTE (persona calificada — puede diferir del pagador)
+  // Se envían a PSE como referenceNumber1 y referenceNumber2 (Requisito #13)
+  reference1: string;   // identificación del paciente
+  reference2: string;   // nombre completo del paciente
+  reference3?: string;  // trazabilidad interna (ticketId — generado por backend)
   serviceCode?: string;
   vat?: number;
 }
@@ -314,9 +374,9 @@ const form: FormData = reactive({
   bankCode: '',
   serviceCode: import.meta.env.VITE_PSE_SERVICE_CODE || '',
   vat: 0,
-  reference1: '',
-  reference2: '',
-  reference3: ''
+  reference1: '',   // identificación del paciente
+  reference2: '',   // nombre del paciente
+  reference3: ''    // trazabilidad interna (backend lo completa con ticketId)
 });
 
 const isFormValid: ComputedRef<boolean> = computed(() => {
@@ -328,7 +388,9 @@ const isFormValid: ComputedRef<boolean> = computed(() => {
     form.email?.trim() &&
     form.address?.trim() &&
     form.amount && form.amount > 0 &&
-    form.description?.trim()
+    form.description?.trim() &&
+    form.reference1?.trim() &&   // ID del paciente obligatorio
+    form.reference2?.trim()      // Nombre del paciente obligatorio
   );
 });
 

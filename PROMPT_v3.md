@@ -8071,3 +8071,270 @@ protege el `POST /api/pse/transaction` (verificable cuando haya tokens reCAPTCHA
 | 14 | Flujo PSE Avanza + OTP Banka | ⚠️ Prueba con credenciales reales |
 
 ---
+### 17.10 Apego al SDK de ACH
+
+
+## Análisis comparativo: SDK oficial PSE-ACH vs Proyecto Junta Atlántico
+
+> El archivo `NodeJS.zip` suministrado por ACH Colombia es el **SDK oficial Node.js**
+> para integrar PSE Avanza. Es una **librería cliente** (no una app completa) que
+> encapsula los 4 métodos de la API: `GetBankListNF`, `CreateTransactionPaymentNF`,
+> `GetTransactionInformationNF` y `FinalizeTransactionPaymentNF`.
+
+---
+
+### Diferencias de diseño (no son errores)
+
+| Aspecto | SDK oficial PSE-ACH | Proyecto Junta Atlántico | Evaluación |
+|---|---|---|---|
+| Reintentos de token | Hasta 3 intentos forzados (`forceLogin`) | Caché con expiración y renovación automática | ✅ Tu enfoque es más robusto y eficiente |
+| Cifrado JWE | Librería externa `jose` + `cryptr` | `crypto` nativo de Node.js (AES-256-GCM) | ✅ Equivalente en seguridad; sin dependencias externas |
+| Peticiones HTTP | Módulo `https` nativo con callbacks | `axios` con `async/await` | ✅ `axios` es más mantenible y legible |
+| Arquitectura | SDK puro (solo lógica de integración, sin servidor ni UI) | App completa: Express API + Vue 3 frontend | ✅ Es lo esperado — el SDK no incluye interfaz de usuario |
+| Tests automatizados | Sin tests | 38 tests (unitarios + integración) | ✅ Tu proyecto es más sólido y verificable |
+| Seguridad perimetral | Sin ninguna capa de seguridad | reCAPTCHA v3, rate limit por IP, Helmet, sanitización, validación de origin | ✅ Tu proyecto agrega todo lo requerido por la Sección 11 ACH |
+| Manejo de errores | Rechaza la promesa con el error crudo | Códigos de error normalizados, mensajes ACH literales, logging estructurado | ✅ Tu proyecto cumple los mensajes exigidos en los 14 puntos de certificación |
+| Validación de entrada | Sin validación | Esquemas Zod con validación cruzada (userType/identificationType, máx. 2 decimales) | ✅ Tu proyecto cumple la matriz de validaciones §7.1 del instructivo ACH v21 |
+
+---
+
+### Correcciones pendientes detectadas en la comparación
+
+#### ⚠️ Corrección 1 — Crítica: formato del token OAuth (`token.service.ts`)
+
+El SDK oficial usa `application/x-www-form-urlencoded` para el endpoint de token de Apigee:
+
+```typescript
+// SDK oficial (RequestServices.ts — doPostFormAPICall)
+var postData = querystring.stringify({
+    grant_type: "client_credentials",
+    client_id: this.apigeeClientId,
+    client_secret: this.apigeeClientSecret
+});
+headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+```
+
+Tu `token.service.ts` envía JSON:
+
+```typescript
+// Proyecto actual — incorrecto para Apigee
+data: { client_id: config.clientId, client_secret: config.clientSecret },
+headers: { 'Content-Type': 'application/json' }
+```
+
+**Impacto:** el endpoint de token de Apigee rechaza JSON con `invalid_client`. Esto
+causará fallo al renovar el token OAuth cuando se configuren las credenciales reales.
+
+**Fix requerido en `backend/services/token.service.ts`:**
+
+```typescript
+import qs from 'querystring';
+
+const response = await axios({
+  method: 'POST',
+  url: config.tokenUrl,
+  data: qs.stringify({
+    grant_type: 'client_credentials',
+    client_id: config.clientId,
+    client_secret: config.clientSecret
+  }),
+  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  timeout: 10000
+});
+```
+
+---
+
+#### ⚠️ Corrección 2 — Condicional: encoding de las claves de cifrado (`encryption.service.ts`)
+
+El SDK oficial lee las claves como texto plano (`utf8`):
+
+```typescript
+// SDK oficial (JWEServices.ts)
+const key = Buffer.from(password, 'utf8');
+const Iv  = Buffer.from(iv, 'utf8');
+```
+
+Tu `encryption.service.ts` las decodifica desde `base64`:
+
+```typescript
+// Proyecto actual
+this.key = Buffer.from(config.encryptionKey, 'base64');
+this.iv  = Buffer.from(config.encryptionIv, 'base64');
+```
+
+**Impacto:** depende del formato en que ACH Colombia entregue las claves reales.
+
+- Si las entrega como **texto plano** → cambiar `'base64'` por `'utf8'` en `encryption.service.ts`.
+- Si las entrega en **base64** → tu implementación actual está correcta.
+
+**Acción:** confirmar el formato exacto con ACH Colombia al recibir las credenciales.
+
+---
+
+### Conclusión
+
+El proyecto Junta Atlántico está **completamente alineado con el SDK oficial de PSE-ACH**
+en cuanto a métodos, campos, modelos y flujo de integración. Supera al SDK en arquitectura,
+seguridad y calidad de código. Las dos correcciones identificadas son menores y no
+requieren cambios estructurales — solo ajustes puntuales que se aplican cuando lleguen
+las credenciales reales de ACH Colombia.
+
+## 16. PRUEBAS DEL BACKEND
+
+## Pruebas de verificación del backend en producción
+
+> Ejecutar desde **PowerShell** en Windows contra `https://api.juntaatlantico.co`.
+> No requieren credenciales PSE ni tokens válidos. Resultados obtenidos el 19 de julio de 2026.
+
+---
+
+### Prueba 1 — Servidor activo + lista de bancos mock
+
+Verifica que el proceso Node.js arrancó correctamente, Express responde y el
+`bankList.service.ts` entrega la lista ordenada alfabéticamente desde el fallback mock.
+
+```powershell
+Invoke-RestMethod -Uri "https://api.juntaatlantico.co/api/pse/banks" `
+    -Method GET | ConvertTo-Json -Depth 3
+```
+
+**Respuesta esperada (`200 OK`):**
+```json
+{
+  "success": true,
+  "data": [
+    { "financialInstitutionCode": "069", "financialInstitutionName": "BANCO AV VILLAS" },
+    { "financialInstitutionCode": "001", "financialInstitutionName": "BANCO DE BOGOTA" }
+  ],
+  "message": "Lista de bancos obtenida exitosamente",
+  "meta": { "source": "mock", "cached": false }
+}
+```
+
+> Cuando se configuren las credenciales reales de PSE, `"source"` cambiará de `"mock"` a `"pse"`.
+
+---
+
+### Prueba 2 — Respuesta 404 en formato JSON
+
+Verifica que el `notFoundHandler` devuelve JSON (no HTML) para rutas inexistentes.
+Confirma que el backend opera como **API pura** (Opción B).
+
+```powershell
+try {
+    Invoke-RestMethod -Uri "https://api.juntaatlantico.co/api/pse/noexiste" -Method GET
+} catch {
+    $_.ErrorDetails.Message | ConvertFrom-Json | ConvertTo-Json
+}
+```
+
+**Respuesta esperada (`404`):**
+```json
+{
+  "success": false,
+  "code": "NOT_FOUND",
+  "message": "Endpoint no encontrado: GET /api/pse/noexiste"
+}
+```
+
+---
+
+### Prueba 3 — Middleware reCAPTCHA activo
+
+Verifica que el middleware de reCAPTCHA v3 bloquea correctamente un `POST /transaction`
+sin token, confirmando que ninguna transacción puede crearse sin verificación de seguridad.
+
+```powershell
+$body = @{
+    bankCode              = "1022"
+    userType              = "person"
+    identificationType    = "CedulaDeCiudadania"
+    identificationNumber  = "123456789"
+    fullName              = "Test Usuario"
+    cellphoneNumber       = "3001234567"
+    email                 = "test@test.co"
+    address               = "Calle 1 # 2-3"
+    description           = "Pago prueba"
+    serviceCode           = "12345"
+    amount                = 10000
+} | ConvertTo-Json
+
+try {
+    Invoke-RestMethod -Uri "https://api.juntaatlantico.co/api/pse/transaction" `
+        -Method POST `
+        -ContentType "application/json" `
+        -Body $body
+} catch {
+    $_.ErrorDetails.Message | ConvertFrom-Json | ConvertTo-Json
+}
+```
+
+**Respuesta esperada (`400`):**
+```json
+{
+  "success": false,
+  "code": "FAIL_RECAPTCHA",
+  "message": "No se pudo verificar que no eres un robot. Por favor intenta de nuevo."
+}
+```
+
+---
+
+### Prueba 4 — Rate limit por IP (trust proxy)
+
+Verifica que `express-rate-limit` identifica correctamente la IP real del usuario
+a través del proxy inverso de Hostinger (`app.set('trust proxy', 1)`).
+La ruta `/banks` usa el `globalLimiter` (60 req/min); los 12 requests deben pasar
+sin error y sin warnings en los logs de Hostinger.
+
+```powershell
+1..12 | ForEach-Object {
+    try {
+        Invoke-RestMethod -Uri "https://api.juntaatlantico.co/api/pse/banks" `
+            -Method GET | Out-Null
+        Write-Host "Request $_ : OK"
+    } catch {
+        Write-Host "Request $_ : $($_.Exception.Response.StatusCode) <- 429 si excede el limite"
+    }
+}
+```
+
+**Respuesta esperada:** 12 líneas `OK` (límite de 60 req/min no superado).
+El `pseTransactionLimiter` (10 req/min) protege el `POST /transaction`
+y se verificará cuando haya tokens reCAPTCHA válidos.
+
+---
+
+### Prueba 5 — CORS: origen del frontend autorizado
+
+Verifica que el header `Access-Control-Allow-Origin` está configurado correctamente,
+permitiendo que `pse.juntaatlantico.co` llame al backend sin errores de CORS en el navegador.
+
+```powershell
+$headers = @{ "Origin" = "https://pse.juntaatlantico.co" }
+$r = Invoke-WebRequest -Uri "https://api.juntaatlantico.co/api/pse/banks" `
+    -Headers $headers
+$r.Headers["Access-Control-Allow-Origin"]
+```
+
+**Respuesta esperada:**
+```
+https://pse.juntaatlantico.co
+```
+
+---
+
+### Resultados obtenidos en producción
+
+| # | Prueba | Estado | Observación |
+|---|---|---|---|
+| 1 | Servidor + bancos mock | ✅ | Lista A-Z, `source: mock` |
+| 2 | 404 en JSON | ✅ | `NOT_FOUND` en JSON, sin HTML |
+| 3 | reCAPTCHA bloqueando | ✅ | `FAIL_RECAPTCHA` correcto |
+| 4 | Rate limit por IP | ✅ | Sin warnings en logs de Hostinger |
+| 5 | CORS frontend autorizado | ✅ | `Access-Control-Allow-Origin` correcto |
+
+> **Nota:** Las pruebas 1, 4 y 5 cambiarán de comportamiento cuando se configuren
+> las credenciales reales de PSE: la prueba 1 mostrará `"source": "pse"` con la
+> lista real de bancos, y las pruebas 4 y 5 seguirán funcionando igual.

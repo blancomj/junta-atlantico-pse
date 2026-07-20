@@ -25,8 +25,18 @@ export const createTransactionSchema = z.object({
   email: z.string().email('Email invalido'),
   address: z.string().min(1, 'Direccion requerida').max(200),
   description: z.string().min(1, 'Descripcion requerida').max(80),
-  reference1: z.string().max(80).optional().default(''),
-  reference2: z.string().max(80).optional().default(''),
+  // Datos del paciente (Requisito PSE #13)
+  // reference1 = identificacion del paciente (obligatorio)
+  // reference2 = nombre del paciente (obligatorio)
+  // reference3 = trazabilidad interna (opcional, backend usa ticketId como fallback)
+  reference1: z.string()
+    .min(1, 'La identificacion del paciente es requerida')
+    .max(80, 'Maximo 80 caracteres')
+    .refine(v => !/[|"]/.test(v), 'No puede contener los caracteres | ni "'),
+  reference2: z.string()
+    .min(1, 'El nombre del paciente es requerido')
+    .max(80, 'Maximo 80 caracteres')
+    .refine(v => !/[|"]/.test(v), 'No puede contener los caracteres | ni "'),
   reference3: z.string().max(80).optional().default(''),
   vat: z.number().min(0)
     .refine((n) => /^\d+(\.\d{1,2})?$/.test(n.toString()), 'El IVA no puede tener mas de 2 decimales')
