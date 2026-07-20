@@ -16,6 +16,14 @@ import logger from './utils/logger';
 const app: Express = express();
 const PORT: number = parseInt(process.env.PORT || '3000', 10);
 
+
+// Hostinger (y cualquier hosting gestionado) pone un proxy inverso (Nginx)
+// delante de Node.js. Sin esta configuracion, Express ignora el header
+// X-Forwarded-For y el rate limit identifica a todos los usuarios como
+// si fueran la misma IP (la del proxy interno).
+// El valor 1 indica "confiar en un nivel de proxy" — el de Hostinger.
+app.set('trust proxy', 1);
+
 // ============================================
 // MIDDLEWARES DE SEGURIDAD (Seccion 11 ACH)
 // ============================================
@@ -77,13 +85,11 @@ app.use(notFoundHandler);
 // Error global
 app.use(errorHandler);
 
-if (require.main === module) {
-  app.listen(PORT, () => {
-    logger.info(`Servidor PSE ejecutandose en puerto ${PORT}`);
-    logger.info(`Entorno: ${config.env}`);
-    logger.info(`reCAPTCHA: ${config.recaptcha.secret ? 'activo' : 'INACTIVO'}`);
-    logger.info(`Rate Limit: ${config.rateLimit.max} req/${config.rateLimit.windowMs / 1000}s`);
-  });
-}
+app.listen(PORT, () => {
+  logger.info(`Servidor PSE ejecutandose en puerto ${PORT}`);
+  logger.info(`Entorno: ${config.env}`);
+  logger.info(`reCAPTCHA: ${config.recaptcha.secret ? 'activo' : 'INACTIVO'}`);
+  logger.info(`Rate Limit: ${config.rateLimit.max} req/${config.rateLimit.windowMs / 1000}s`);
+});
 
 export default app;

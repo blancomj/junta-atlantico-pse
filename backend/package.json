@@ -2,10 +2,10 @@
   "name": "junta-atlantico-pse-backend",
   "version": "2.0.0",
   "description": "Backend para integración PSE Avanza v21",
-  "main": "dist/server.js",
+  "main": "dist/backend/server.js",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "start": "node dist/server.js",
+    "build": "echo \"Build omitido: dist/ incluido en el zip\"",
+    "start": "node dist/backend/server.js",
     "dev": "ts-node server.ts",
     "test": "jest --forceExit --detectOpenHandles",
     "test:integration": "jest tests/integration --forceExit --detectOpenHandles",

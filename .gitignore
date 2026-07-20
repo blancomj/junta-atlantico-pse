@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 
+# Zips de despliegue generados por scripts/build-zips.mjs
+deploy/
+
 # Environment variables
 .env
 .env.local
