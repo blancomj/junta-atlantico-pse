@@ -53,7 +53,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
               </svg>
               <input v-model="beneficiarySearch" @keyup.enter="searchBeneficiary" type="text"
-                placeholder="Cedula o nombre de beneficiario..."
+                placeholder="Paciente, identificacion o expediente..."
                 class="pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 w-72" />
               <button v-if="beneficiarySearch" @click="clearBeneficiarySearch"
                 class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
@@ -207,14 +207,14 @@ async function loadData() {
 
 async function fetchBeneficiaries(paymentId: string): Promise<BatchPaymentBeneficiary[]> {
   const token = authService.getToken();
-  const baseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:3000/api/pse');
+  const baseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:3000/api/pse').replace(/\/pse$/, '');
   try {
-    const res = await fetch(`${baseUrl}/batch-payments/${paymentId}/beneficiaries`, {
+    const res = await fetch(`${baseUrl}/batch-payments/${paymentId}`, {
       headers: { Authorization: `Bearer ${token}` }
     });
     if (!res.ok) return [];
     const json = await res.json();
-    return json.data || [];
+    return json.data?.beneficiaries || [];
   } catch {
     return [];
   }

@@ -19,7 +19,9 @@ export const createTransactionSchema = z.object({
     .refine((n) => /^\d+(\.\d{1,2})?$/.test(n.toString()), 'El monto no puede tener mas de 2 decimales'),
   userType: UserTypeEnum,
   identificationType: IdentificationTypeEnum,
-  identificationNumber: z.string().min(1, 'Numero de identificacion requerido'),
+  identificationNumber: z.string()
+    .min(1, 'Numero de identificacion requerido')
+    .max(20, 'Maximo 20 caracteres'),
   fullName: z.string().min(1, 'Nombre completo requerido').max(200),
   cellphoneNumber: z.string().regex(/^\d{10}$/, 'El celular debe tener 10 digitos'),
   email: z.string().email('Email invalido'),
@@ -44,6 +46,7 @@ export const createTransactionSchema = z.object({
   serviceCode: z.string().max(10).optional().default(''),
   indicator4per1000: z.number().int().min(0).max(1).optional().default(0),
   ticketId: z.union([z.string(), z.number()]).optional(),
+  batchPaymentId: z.string().optional(),
   recaptchaToken: z.string().optional()
 }).refine(
   (data) => {
@@ -63,6 +66,24 @@ export const createTransactionSchema = z.object({
     return !forbidden.test(data.description);
   },
   { message: 'La descripcion no puede contener los caracteres | ni "', path: ['description'] }
+).refine(
+  (data) => {
+    const patterns: Record<string, RegExp> = {
+      CedulaDeCiudadania: /^\d{6,10}$/,
+      TarjetaDeIdentidad: /^\d{6,10}$/,
+      RegistroCivilDeNacimiento: /^\d{6,10}$/,
+      CedulaDeExtranjeria: /^\d{6,12}$/,
+      TarjetaDeExtranjeria: /^\d{6,12}$/,
+      Pasaporte: /^[A-Za-z0-9]{5,20}$/,
+      DocumentoDeIdentificacionExtranjero: /^[A-Za-z0-9]{6,15}$/,
+      NIT: /^\d{9,15}$/
+    };
+
+    const pattern = patterns[data.identificationType];
+    if (!pattern) return false;
+    return pattern.test(data.identificationNumber);
+  },
+  { message: 'Formato de identificacion invalido para el tipo seleccionado', path: ['identificationNumber'] }
 );
 
 export const finalizeTransactionSchema = z.object({

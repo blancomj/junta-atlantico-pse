@@ -25,6 +25,7 @@ router.get('/users', async (req: Request, res: Response): Promise<void> => {
 
     const [rows] = await pool.query(
       `SELECT u.id, u.full_name, u.email, u.role, u.is_active, u.status,
+              u.nit, u.direccion, u.telefono,
               u.last_login, u.created_at, e.entity_name
        FROM entity_users u
        JOIN entities e ON u.entity_id = e.id
@@ -41,10 +42,16 @@ router.get('/users', async (req: Request, res: Response): Promise<void> => {
 
 router.post('/users', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { fullName, email, role } = req.body;
+    const { fullName, email, nit, role, direccion, telefono } = req.body;
 
-    if (!fullName || !email) {
-      res.status(400).json({ success: false, message: 'Nombre y email son requeridos' });
+    if (!fullName || !email || !nit || !direccion || !telefono) {
+      res.status(400).json({ success: false, message: 'Todos los campos son requeridos: nombre, email, NIT, direccion, telefono' });
+      return;
+    }
+
+    const validRoles = ['admin', 'user'];
+    if (role && !validRoles.includes(role)) {
+      res.status(400).json({ success: false, message: 'Rol invalido. Valores permitidos: admin, user' });
       return;
     }
 
@@ -63,16 +70,20 @@ router.post('/users', async (req: Request, res: Response): Promise<void> => {
     const placeholderHash = await bcrypt.hash(crypto.randomBytes(16).toString('hex'), 12);
 
     await pool.query(
-      `INSERT INTO entity_users (id, entity_id, email, full_name, role, password_hash, status, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending', 0)`,
-      [userId, user.entityId, email, fullName, role || 'user', placeholderHash]
+      `INSERT INTO entity_users (id, entity_id, email, full_name, nit, direccion, telefono, role, password_hash, status, is_active)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0)`,
+      [userId, user.entityId, email, fullName, nit || null, direccion || null, telefono || null, role || 'user', placeholderHash]
     );
 
     logger.info(`User created by admin: ${email} (status: pending)`);
 
     // Auto-generate invitation token
     const token = await authService.generateInvitationToken(userId);
-    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const baseUrl = process.env.FRONTEND_URL;
+    if (!baseUrl) {
+      res.status(500).json({ success: false, message: 'Configuracion incompleta: FRONTEND_URL no definida' });
+      return;
+    }
     const invitationLink = `${baseUrl}/first-login?token=${token}`;
 
     // Send invitation email
@@ -112,7 +123,11 @@ router.post('/users/:id/invite', async (req: Request, res: Response): Promise<vo
     const targetUser = rows[0];
 
     const token = await authService.generateInvitationToken(id);
-    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const baseUrl = process.env.FRONTEND_URL;
+    if (!baseUrl) {
+      res.status(500).json({ success: false, message: 'Configuracion incompleta: FRONTEND_URL no definida' });
+      return;
+    }
     const invitationLink = `${baseUrl}/first-login?token=${token}`;
 
     // Send invitation email (non-blocking)
@@ -142,7 +157,27 @@ router.post('/users/:id/invite', async (req: Request, res: Response): Promise<vo
 router.patch('/users/:id', async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const { fullName, role, is_active } = req.body;
+    const { fullName, role, is_active, nit, direccion, telefono } = req.body;
+
+    const validRoles = ['admin', 'user'];
+    if (role !== undefined && !validRoles.includes(role)) {
+      res.status(400).json({ success: false, message: 'Rol invalido. Valores permitidos: admin, user' });
+      return;
+    }
+
+    if (nit !== undefined && !nit) {
+      res.status(400).json({ success: false, message: 'NIT es requerido' });
+      return;
+    }
+    if (direccion !== undefined && !direccion) {
+      res.status(400).json({ success: false, message: 'Direccion es requerida' });
+      return;
+    }
+    if (telefono !== undefined && !telefono) {
+      res.status(400).json({ success: false, message: 'Telefono es requerido' });
+      return;
+    }
+
     const pool = getPool();
 
     const [rows] = await pool.query('SELECT id FROM entity_users WHERE id = ?', [id]) as any[];
@@ -165,6 +200,18 @@ router.patch('/users/:id', async (req: Request, res: Response): Promise<void> =>
     if (is_active !== undefined) {
       fields.push('is_active = ?');
       params.push(is_active ? 1 : 0);
+    }
+    if (nit !== undefined) {
+      fields.push('nit = ?');
+      params.push(nit || null);
+    }
+    if (direccion !== undefined) {
+      fields.push('direccion = ?');
+      params.push(direccion || null);
+    }
+    if (telefono !== undefined) {
+      fields.push('telefono = ?');
+      params.push(telefono || null);
     }
 
     if (fields.length === 0) {

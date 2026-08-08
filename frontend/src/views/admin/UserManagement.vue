@@ -74,21 +74,36 @@
       <!-- Create Modal -->
       <div v-if="showCreateModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
         <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4">
-          <h3 class="text-lg font-bold mb-4">Nuevo Usuario</h3>
+          <h3 class="text-lg font-bold mb-4">Nueva Entidad</h3>
           <form @submit.prevent="handleCreate" class="space-y-4">
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">Nombre completo</label>
-              <input v-model="newUser.fullName" type="text" required
+              <label class="block text-sm font-medium text-gray-700 mb-1">Nombre completo <span class="text-red-500">*</span></label>
+              <input v-model="editUser.fullName" type="text" required
                 class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm" />
             </div>
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Email <span class="text-red-500">*</span></label>
               <input v-model="newUser.email" type="email" required
                 class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm" />
             </div>
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">Rol</label>
-              <select v-model="newUser.role"
+              <label class="block text-sm font-medium text-gray-700 mb-1">NIT</label>
+              <input v-model="newUser.nit" type="text" required placeholder="Ej: 900123456-7"
+                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Direccion <span class="text-red-500">*</span></label>
+              <input v-model="newUser.direccion" type="text" required placeholder="Direccion de la entidad"
+                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Telefono <span class="text-red-500">*</span></label>
+              <input v-model="newUser.telefono" type="tel" required placeholder="Ej: 3001234567" maxlength="10"
+                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Rol <span class="text-red-500">*</span></label>
+              <select v-model="newUser.role" required
                 class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm">
                 <option value="user">Usuario</option>
                 <option value="admin">Administrador</option>
@@ -124,18 +139,33 @@
           <h3 class="text-lg font-bold mb-4">Editar Usuario</h3>
           <form @submit.prevent="handleEdit" class="space-y-4">
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">Nombre completo</label>
-              <input v-model="editUser.fullName" type="text" required
+              <label class="block text-sm font-medium text-gray-700 mb-1">Nombre completo <span class="text-red-500">*</span></label>
+              <input v-model="newUser.fullName" type="text" required
                 class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm" />
             </div>
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
-              <input :value="editUser.email" type="email" disabled
-                class="w-full px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-500 cursor-not-allowed text-sm" />
+              <label class="block text-sm font-medium text-gray-700 mb-1">Email <span class="text-red-500">*</span></label>
+              <input v-model="newUser.email" type="email" required
+                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm" />
             </div>
             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">Rol</label>
-              <select v-model="editUser.role"
+              <label class="block text-sm font-medium text-gray-700 mb-1">NIT <span class="text-red-500">*</span></label>
+              <input v-model="editUser.nit" type="text" required placeholder="Ej: 900123456-7"
+                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Direccion <span class="text-red-500">*</span></label>
+              <input v-model="editUser.direccion" type="text" required placeholder="Direccion de la entidad"
+                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Telefono <span class="text-red-500">*</span></label>
+              <input v-model="editUser.telefono" type="tel" required placeholder="Ej: 3001234567" maxlength="10"
+                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Rol <span class="text-red-500">*</span></label>
+              <select v-model="editUser.role" required
                 class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm">
                 <option value="user">Usuario</option>
                 <option value="admin">Administrador</option>
@@ -176,6 +206,9 @@ interface User {
   id: string;
   full_name: string;
   email: string;
+  nit: string;
+  direccion: string;
+  telefono: string;
   role: string;
   is_active: boolean;
   status: string;
@@ -189,13 +222,13 @@ const showCreateModal = ref(false);
 const creating = ref(false);
 const createError = ref('');
 const createdLink = ref('');
-const newUser = ref({ fullName: '', email: '', role: 'user' });
+const newUser = ref({ fullName: '', email: '', nit: '', direccion: '', telefono: '', role: 'user' });
 
 // Edit
 const showEditModal = ref(false);
 const editing = ref(false);
 const editError = ref('');
-const editUser = ref({ id: '', fullName: '', email: '', role: 'user', isActive: true });
+const editUser = ref({ id: '', fullName: '', email: '', nit: '', direccion: '', telefono: '', role: 'user', isActive: true });
 
 function authHeaders() {
   return { Authorization: `Bearer ${authService.getToken()}` };
@@ -230,7 +263,7 @@ async function handleCreate() {
 
 function closeCreateModal() {
   showCreateModal.value = false;
-  newUser.value = { fullName: '', email: '', role: 'user' };
+  newUser.value = { fullName: '', email: '', nit: '', direccion: '', telefono: '', role: 'user' };
   createError.value = '';
   createdLink.value = '';
 }
@@ -240,6 +273,9 @@ function openEdit(u: User) {
     id: u.id,
     fullName: u.full_name,
     email: u.email,
+    nit: u.nit || '',
+    direccion: u.direccion || '',
+    telefono: u.telefono || '',
     role: u.role,
     isActive: !!u.is_active
   };
@@ -253,6 +289,9 @@ async function handleEdit() {
   try {
     await axios.patch(`${BASE_URL}/admin/users/${editUser.value.id}`, {
       fullName: editUser.value.fullName,
+      nit: editUser.value.nit,
+      direccion: editUser.value.direccion,
+      telefono: editUser.value.telefono,
       role: editUser.value.role,
       is_active: editUser.value.isActive
     }, { headers: authHeaders() });

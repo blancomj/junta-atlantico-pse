@@ -7,6 +7,7 @@ const API_ROOT = BASE_URL.replace(/\/pse$/, '');
 class AuthService {
   private accessToken: string | null = null;
   private _refreshToken: string | null = null;
+  private refreshPromise: Promise<string> | null = null;
 
   constructor() {
     this.accessToken = localStorage.getItem('accessToken');
@@ -26,6 +27,39 @@ class AuthService {
     return user;
   }
 
+  async refreshAccessToken(): Promise<string> {
+    if (this.refreshPromise) {
+      return this.refreshPromise;
+    }
+
+    this.refreshPromise = (async () => {
+      try {
+        if (!this._refreshToken) {
+          throw new Error('No refresh token available');
+        }
+
+        const response = await axios.post(`${API_ROOT}/auth/refresh`, {
+          refreshToken: this._refreshToken
+        });
+
+        const { accessToken, refreshToken } = response.data.data;
+        this.accessToken = accessToken;
+        this._refreshToken = refreshToken;
+        localStorage.setItem('accessToken', accessToken);
+        localStorage.setItem('refreshToken', refreshToken);
+
+        return accessToken;
+      } catch (error) {
+        this.logout();
+        throw error;
+      } finally {
+        this.refreshPromise = null;
+      }
+    })();
+
+    return this.refreshPromise;
+  }
+
   async forgotPassword(email: string): Promise<void> {
     await axios.post(`${API_ROOT}/auth/forgot-password`, { email });
   }
@@ -38,6 +72,15 @@ class AuthService {
     await axios.post(`${API_ROOT}/auth/change-password`, { currentPassword, newPassword }, {
       headers: { Authorization: `Bearer ${this.accessToken}` }
     });
+  }
+
+  async updateProfile(nit: string, direccion: string, telefono: string): Promise<AuthUser> {
+    const response = await axios.patch(`${API_ROOT}/auth/profile`, { nit, direccion, telefono }, {
+      headers: { Authorization: `Bearer ${this.accessToken}` }
+    });
+    const updatedUser = response.data.data;
+    localStorage.setItem('user', JSON.stringify(updatedUser));
+    return updatedUser;
   }
 
   async getMe(): Promise<AuthUser> {

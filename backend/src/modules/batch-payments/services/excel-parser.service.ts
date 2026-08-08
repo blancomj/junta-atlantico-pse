@@ -4,9 +4,29 @@ import { ExcelRow, ValidationError } from '../types/batch-payment.types';
 // In-memory cache for uploaded files (expires in 30 min)
 const fileCache = new Map<string, { data: ExcelRow[]; fileName: string; expiresAt: number }>();
 const FILE_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+const MAX_CACHE_ENTRIES = 50; // máximo 50 archivos en cache
+const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // cleanup cada 5 min
+
+let cleanupTimer: NodeJS.Timeout | null = null;
 
 function generateFileId(): string {
   return 'file_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
+}
+
+function evictOldest(): void {
+  let oldestKey: string | null = null;
+  let oldestTime = Infinity;
+
+  for (const [key, value] of fileCache.entries()) {
+    if (value.expiresAt < oldestTime) {
+      oldestTime = value.expiresAt;
+      oldestKey = key;
+    }
+  }
+
+  if (oldestKey) {
+    fileCache.delete(oldestKey);
+  }
 }
 
 export default {
@@ -102,6 +122,11 @@ export default {
   },
 
   cacheFile(data: ExcelRow[], fileName: string): string {
+    // Si supera el límite, eliminar la entrada más antigua
+    if (fileCache.size >= MAX_CACHE_ENTRIES) {
+      evictOldest();
+    }
+
     const fileId = generateFileId();
     fileCache.set(fileId, {
       data,
@@ -132,5 +157,35 @@ export default {
         fileCache.delete(key);
       }
     }
+  },
+
+  // Iniciar cleanup periódico
+  startCleanup(): void {
+    if (cleanupTimer) return; // ya está corriendo
+
+    cleanupTimer = setInterval(() => {
+      this.cleanup();
+    }, CLEANUP_INTERVAL_MS);
+
+    // Permitir que el proceso termine sin esperar al timer
+    if (cleanupTimer.unref) {
+      cleanupTimer.unref();
+    }
+  },
+
+  // Detener cleanup periódico
+  stopCleanup(): void {
+    if (cleanupTimer) {
+      clearInterval(cleanupTimer);
+      cleanupTimer = null;
+    }
+  },
+
+  // Obtener stats del cache
+  getCacheStats(): { entries: number; maxEntries: number } {
+    return {
+      entries: fileCache.size,
+      maxEntries: MAX_CACHE_ENTRIES
+    };
   }
 };

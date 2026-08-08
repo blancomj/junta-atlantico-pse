@@ -9,6 +9,7 @@ deploy/
 
 # Environment variables
 .env
+.env.development
 .env.local
 .env.*.local
 

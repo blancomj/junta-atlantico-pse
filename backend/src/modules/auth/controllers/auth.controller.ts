@@ -62,12 +62,17 @@ class AuthController {
       
       // Send reset email if token exists
       if (result.token) {
-        const resetLink = `${process.env.FRONTEND_URL || 'https://pse.juntaatlantico.co'}/reset-password?token=${result.token}`;
-        try {
-          await emailService.sendPasswordReset(email, resetLink);
-          logger.info(`Correo de recuperacion enviado a: ${email}`);
-        } catch (emailError) {
-          logger.error(`Error enviando correo a ${email}:`, (emailError as Error).message);
+        const baseUrl = process.env.FRONTEND_URL;
+        if (baseUrl) {
+          const resetLink = `${baseUrl}/reset-password?token=${result.token}`;
+          try {
+            await emailService.sendPasswordReset(email, resetLink);
+            logger.info(`Correo de recuperacion enviado a: ${email}`);
+          } catch (emailError) {
+            logger.error(`Error enviando correo a ${email}:`, (emailError as Error).message);
+          }
+        } else {
+          logger.warn('FRONTEND_URL no definida, no se envio correo de recuperacion');
         }
       }
 
@@ -152,6 +157,37 @@ class AuthController {
       res.json({ success: true, data: req.user });
     } catch (error) {
       res.status(500).json({ success: false, message: 'Error al obtener usuario' });
+    }
+  }
+
+  async updateProfile(req: Request, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res.status(401).json({ success: false, message: 'No autenticado' });
+        return;
+      }
+
+      const { nit, direccion, telefono } = req.body;
+
+      if (!nit || !direccion || !telefono) {
+        res.status(400).json({ success: false, message: 'NIT, direccion y telefono son requeridos' });
+        return;
+      }
+
+      await authService.updateProfile(req.user.id, nit, direccion, telefono);
+
+      const updatedUser = await authService.verifyAccessToken(
+        require('jsonwebtoken').sign(
+          { userId: req.user.id, email: req.user.email, role: req.user.role, entityId: req.user.entityId },
+          process.env.JWT_SECRET!,
+          { expiresIn: '5s' }
+        )
+      );
+
+      res.json({ success: true, message: 'Perfil actualizado correctamente', data: updatedUser });
+    } catch (error) {
+      logger.error('Error updating profile:', (error as Error).message);
+      res.status(500).json({ success: false, message: 'Error al actualizar perfil' });
     }
   }
 }

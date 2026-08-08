@@ -19,6 +19,7 @@ import { requestIdMiddleware } from './middleware/requestId.middleware';
 import { sanitizeInput } from './middleware/sanitize.middleware';
 import { testConnection, closePool } from './src/database/connection';
 import { runMigrations } from './src/database/migrator';
+import excelParser from './src/modules/batch-payments/services/excel-parser.service';
 import logger from './utils/logger';
 
 const app: Express = express();
@@ -108,6 +109,9 @@ async function startServer() {
     // Run migrations
     await runMigrations();
 
+    // Start Excel cache cleanup
+    excelParser.startCleanup();
+
     // Start server
     app.listen(PORT, () => {
       logger.info(`Servidor PSE ejecutandose en puerto ${PORT}`);
@@ -125,12 +129,14 @@ async function startServer() {
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received. Shutting down gracefully...');
+  excelParser.stopCleanup();
   await closePool();
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
   logger.info('SIGINT received. Shutting down gracefully...');
+  excelParser.stopCleanup();
   await closePool();
   process.exit(0);
 });

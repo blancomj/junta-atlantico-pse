@@ -4,6 +4,8 @@ export interface BatchPayment {
   user_id: string;
   user_name?: string;
   file_name: string;
+  direccion?: string;
+  telefono?: string;
   estado: 'por_pagar' | 'pagado' | 'anulado';
   total_beneficiarios: number;
   monto_total: number;
@@ -48,6 +50,9 @@ export interface AuthUser {
   id: string;
   email: string;
   name: string;
+  nit: string;
+  direccion: string;
+  telefono: string;
   role: 'admin' | 'user';
   entityName: string;
   mustChangePassword: boolean;

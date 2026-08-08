@@ -184,14 +184,14 @@ async function loadData() {
 
 async function fetchBeneficiaries(paymentId: string): Promise<BatchPaymentBeneficiary[]> {
   const token = authService.getToken();
-  const baseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:3000/api/pse');
+  const baseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:3000/api/pse').replace(/\/pse$/, '');
   try {
-    const res = await fetch(`${baseUrl}/batch-payments/${paymentId}/beneficiaries`, {
+    const res = await fetch(`${baseUrl}/batch-payments/${paymentId}`, {
       headers: { Authorization: `Bearer ${token}` }
     });
     if (!res.ok) return [];
     const json = await res.json();
-    return json.data || [];
+    return json.data?.beneficiaries || [];
   } catch {
     return [];
   }

@@ -39,7 +39,7 @@ class BatchPaymentController {
       }
 
       const user = req.user as AuthUser;
-      const payment = await batchPaymentService.createPayment(fileId, user.id, user.entityId);
+      const payment = await batchPaymentService.createPayment(fileId, user.id, user.entityId, user.direccion, user.telefono);
 
       res.json({ success: true, data: payment });
     } catch (error) {
@@ -77,7 +77,15 @@ class BatchPaymentController {
   async detail(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
+      const user = req.user as AuthUser;
       const payment = await batchPaymentService.findById(id);
+
+      // Verificar propiedad: solo el dueño o un admin pueden ver el detalle
+      if (payment.user_id !== user.id && user.role !== 'admin') {
+        res.status(403).json({ success: false, message: 'No tienes permiso para ver este proceso' });
+        return;
+      }
+
       const beneficiaries = await batchPaymentService.findBeneficiaries(id);
       const attempts = await batchPaymentService.getAttempts(id);
 
@@ -154,16 +162,55 @@ class BatchPaymentController {
 
   async pseCallback(req: Request, res: Response): Promise<void> {
     try {
-      const { trazabilityCode, status, authorizationId } = req.body;
+      const { trazabilityCode, status, authorizationId, bankName } = req.body;
 
-      // TODO: Verify PSE callback signature
-      // For now, process directly
-      logger.info(`PSE callback received: ${trazabilityCode} - ${status}`);
+      if (!trazabilityCode || !status) {
+        res.status(400).json({ success: false, message: 'trazabilityCode y status son requeridos' });
+        return;
+      }
 
-      res.json({ success: true });
+      logger.info(`PSE Callback recibido: ${trazabilityCode} — estado: ${status}`);
+
+      // Normalizar el estado según los códigos estándar de PSE Avanza
+      const normalizedStatus = String(status).toUpperCase();
+
+      if (normalizedStatus === 'APROBADA' || normalizedStatus === 'APPROVED') {
+        // Pago aprobado: marcar como pagado
+        await batchPaymentService.completePayment(
+          trazabilityCode,
+          bankName || '',
+          authorizationId || trazabilityCode
+        );
+        await batchPaymentService.recordAttempt(
+          trazabilityCode, trazabilityCode, 'exitoso',
+          `Pago aprobado por PSE. AuthId: ${authorizationId || 'N/A'}`,
+          bankName
+        );
+        logger.info(`Pago aprobado por callback PSE: ${trazabilityCode}`);
+
+      } else if (
+        normalizedStatus === 'RECHAZADA' || normalizedStatus === 'REJECTED' ||
+        normalizedStatus === 'FALLIDA'   || normalizedStatus === 'FAILED'
+      ) {
+        // Pago rechazado: registrar intento fallido
+        await batchPaymentService.recordAttempt(
+          trazabilityCode, trazabilityCode, 'fallido',
+          `Pago rechazado por PSE. Estado: ${status}`,
+          bankName
+        );
+        logger.warn(`Pago rechazado por callback PSE: ${trazabilityCode} — ${status}`);
+
+      } else {
+        // Estado desconocido o pendiente: solo registrar para auditoría
+        logger.info(`PSE Callback con estado no definitivo: ${trazabilityCode} — ${status}`);
+      }
+
+      // PSE espera siempre 200 OK para confirmar recepción del callback
+      res.status(200).json({ success: true });
     } catch (error) {
-      logger.error('Error processing PSE callback:', (error as Error).message);
-      res.status(500).json({ success: false, message: 'Error al procesar callback' });
+      logger.error('Error procesando PSE callback:', (error as Error).message);
+      // Retornar 200 de todas formas para evitar reintentos infinitos de PSE
+      res.status(200).json({ success: false, message: 'Error interno al procesar callback' });
     }
   }
 

@@ -6,6 +6,7 @@ import ForgotPassword from '../views/auth/ForgotPassword.vue';
 import ResetPassword from '../views/auth/ResetPassword.vue';
 import FirstLogin from '../views/auth/FirstLogin.vue';
 import ChangePassword from '../views/auth/ChangePassword.vue';
+import Profile from '../views/auth/Profile.vue';
 import AdminDashboard from '../views/admin/AdminDashboard.vue';
 import UserManagement from '../views/admin/UserManagement.vue';
 import Dashboard from '../views/batch-payments/Dashboard.vue';
@@ -31,8 +32,11 @@ const routes: RouteRecordRaw[] = [
   { path: '/admin', name: 'AdminDashboard', component: AdminDashboard, beforeEnter: requireAdmin },
   { path: '/admin/users', name: 'UserManagement', component: UserManagement, beforeEnter: requireAdmin },
 
-  // Usuario normal
+  // Authenticated users (admin + user)
+  { path: '/profile', name: 'Profile', component: Profile, beforeEnter: requireAuth },
   { path: '/change-password', name: 'ChangePassword', component: ChangePassword, beforeEnter: requireAuth },
+
+  // Usuario normal
   { path: '/dashboard', name: 'Dashboard', component: Dashboard, beforeEnter: requireAuth },
   { path: '/batch-payments/new', name: 'NewPayment', component: NewPayment, beforeEnter: requireAuth },
   { path: '/batch-payments/:id', name: 'BatchDetail', component: BatchDetail, beforeEnter: requireAuth },

@@ -5,7 +5,13 @@ import { getPool } from '../../../database/connection';
 import { AuthUser, JwtPayload, LoginRequest, LoginResponse } from '../types/auth.types';
 import logger from '../../../../utils/logger';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'pse-junta-atlantico-secret-key';
+const JWT_SECRET: string = (() => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error('JWT_SECRET no está definido en las variables de entorno. El servidor no puede arrancar de forma segura.');
+  }
+  return secret;
+})();
 const JWT_EXPIRES_IN = '30m';
 const REFRESH_TOKEN_EXPIRES_DAYS = 7;
 const BCRYPT_ROUNDS = 12;
@@ -79,6 +85,9 @@ class AuthService {
         id: user.id,
         email: user.email,
         name: user.full_name,
+        nit: user.nit || '',
+        direccion: user.direccion || '',
+        telefono: user.telefono || '',
         role: user.role,
         entityName: user.entity_name || '',
         mustChangePassword: user.must_change_password ? true : false
@@ -225,13 +234,22 @@ class AuthService {
     );
   }
 
+  async updateProfile(userId: string, nit: string, direccion: string, telefono: string): Promise<void> {
+    const pool = getPool();
+
+    await pool.query(
+      'UPDATE entity_users SET nit = ?, direccion = ?, telefono = ? WHERE id = ?',
+      [nit, direccion, telefono, userId]
+    );
+  }
+
   async verifyAccessToken(token: string): Promise<AuthUser> {
     const pool = getPool();
     try {
       const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
 
       const [rows] = await pool.query(
-        `SELECT u.id, u.email, u.full_name, u.role, u.entity_id, e.entity_name
+        `SELECT u.id, u.email, u.full_name, u.nit, u.direccion, u.telefono, u.role, u.entity_id, e.entity_name
          FROM entity_users u
          JOIN entities e ON u.entity_id = e.id
          WHERE u.id = ? AND u.is_active = 1`,
@@ -247,6 +265,9 @@ class AuthService {
         id: user.id,
         email: user.email,
         name: user.full_name,
+        nit: user.nit || '',
+        direccion: user.direccion || '',
+        telefono: user.telefono || '',
         role: user.role,
         entityId: user.entity_id,
         entityName: user.entity_name || ''

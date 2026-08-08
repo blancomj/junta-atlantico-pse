@@ -10,6 +10,9 @@ export interface LoginResponse {
     id: string;
     email: string;
     name: string;
+    nit: string;
+    direccion: string;
+    telefono: string;
     role: 'admin' | 'user';
     entityName: string;
     mustChangePassword: boolean;
@@ -34,6 +37,9 @@ export interface AuthUser {
   id: string;
   email: string;
   name: string;
+  nit: string;
+  direccion: string;
+  telefono: string;
   role: 'admin' | 'user';
   entityId: string;
   entityName: string;

@@ -3,6 +3,7 @@ import pseService from '../services/pse.service';
 import bankListService from '../services/bankList.service';
 import { FINAL_STATES } from '../config/constants';
 import doublePaymentService from '../services/doublePayment.service';
+import batchPaymentService from '../src/modules/batch-payments/services/batch-payment.service';
 import { getPSEErrorMessage } from '../utils/errorMessages';
 import logger from '../utils/logger';
 import { CreateTransactionInput } from '../validation/schemas';
@@ -73,6 +74,29 @@ class PSEController {
 
       if (result.returnCode === 'SUCCESS') {
         logger.info(`Transaccion creada: CUS=${result.trazabilityCode}, score=${(req as any).recaptchaScore}`);
+
+        // Si se proporcionó batchPaymentId, actualizar el estado del lote
+        if (paymentData.batchPaymentId) {
+          try {
+            await batchPaymentService.markAsPaid(
+              paymentData.batchPaymentId,
+              result.trazabilityCode || '',
+              result.pseURL || ''
+            );
+            await batchPaymentService.recordAttempt(
+              paymentData.batchPaymentId,
+              result.trazabilityCode || '',
+              'exitoso',
+              'Transaccion creada exitosamente',
+              paymentData.bankCode
+            );
+            logger.info(`Lote ${paymentData.batchPaymentId} actualizado a estado pagado`);
+          } catch (batchError) {
+            logger.error('Error actualizando estado del lote:', (batchError as Error).message);
+            // No fallar la transacción PSE por error en el lote
+          }
+        }
+
         res.json({
           success: true,
           data: {

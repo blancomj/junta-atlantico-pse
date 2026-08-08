@@ -4,6 +4,8 @@ import { BatchPayment, BatchPaymentBeneficiary, UploadResult, BatchPaymentListQu
 import excelParser from './excel-parser.service';
 import logger from '../../../../utils/logger';
 
+const BATCH_SIZE = 500;
+
 class BatchPaymentService {
   async uploadExcel(buffer: Buffer, fileName: string, userId: string, entityId: string): Promise<UploadResult> {
     const { data, errors } = excelParser.parseExcel(buffer, fileName);
@@ -32,39 +34,59 @@ class BatchPaymentService {
     };
   }
 
-  async createPayment(fileId: string, userId: string, entityId: string): Promise<BatchPayment> {
+  async createPayment(fileId: string, userId: string, entityId: string, direccion?: string, telefono?: string): Promise<BatchPayment> {
     const cached = excelParser.getCachedFile(fileId);
     if (!cached) {
       throw new Error('Archivo no encontrado o expirado. Sube el archivo nuevamente.');
     }
 
     const pool = getPool();
-    const paymentId = crypto.randomUUID();
-    const montoTotal = cached.data.reduce((sum, r) => sum + r.VALOR, 0);
-    const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48 hours
+    const connection = await pool.getConnection();
 
-    // Insert batch payment
-    await pool.query(
-      `INSERT INTO batch_payments (id, entity_id, user_id, file_name, estado, total_beneficiarios, monto_total, expires_at)
-       VALUES (?, ?, ?, ?, 'por_pagar', ?, ?, ?)`,
-      [paymentId, entityId, userId, cached.fileName, cached.data.length, montoTotal, expiresAt]
-    );
+    try {
+      await connection.beginTransaction();
 
-    // Insert beneficiaries
-    for (const row of cached.data) {
-      await pool.query(
-        `INSERT INTO batch_payment_beneficiaries (id, batch_payment_id, numero_identificacion, nombre, numero_expediente, valor)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [crypto.randomUUID(), paymentId, row.NUMERO_IDENTIFICACION, row.NOMBRE, row.NUMERO_EXPEDIENTE, row.VALOR]
+      const paymentId = crypto.randomUUID();
+      const montoTotal = cached.data.reduce((sum, r) => sum + r.VALOR, 0);
+      const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+
+      // Insert batch payment
+      await connection.query(
+        `INSERT INTO batch_payments (id, entity_id, user_id, file_name, direccion, telefono, estado, total_beneficiarios, monto_total, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'por_pagar', ?, ?, ?)`,
+        [paymentId, entityId, userId, cached.fileName, direccion || null, telefono || null, cached.data.length, montoTotal, expiresAt]
       );
+
+      // Insert beneficiaries in batches
+      for (let i = 0; i < cached.data.length; i += BATCH_SIZE) {
+        const batch = cached.data.slice(i, i + BATCH_SIZE);
+        const placeholders = batch.map(() => '(?, ?, ?, ?, ?, ?)').join(', ');
+        const values = batch.flatMap(row => [
+          crypto.randomUUID(), paymentId, row.NUMERO_IDENTIFICACION,
+          row.NOMBRE, row.NUMERO_EXPEDIENTE, row.VALOR
+        ]);
+
+        await connection.query(
+          `INSERT INTO batch_payment_beneficiaries (id, batch_payment_id, numero_identificacion, nombre, numero_expediente, valor)
+           VALUES ${placeholders}`,
+          values
+        );
+      }
+
+      await connection.commit();
+
+      // Delete cached file
+      excelParser.deleteCachedFile(fileId);
+
+      logger.info(`Batch payment created: ${paymentId} with ${cached.data.length} beneficiaries`);
+
+      return this.findById(paymentId);
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
     }
-
-    // Delete cached file
-    excelParser.deleteCachedFile(fileId);
-
-    logger.info(`Batch payment created: ${paymentId} with ${cached.data.length} beneficiaries`);
-
-    return this.findById(paymentId);
   }
 
   async findById(id: string): Promise<BatchPayment> {
@@ -199,8 +221,8 @@ class BatchPaymentService {
     const pool = getPool();
     const searchPattern = `%${query}%`;
 
-    let where = `WHERE (bp.numero_identificacion LIKE ? OR bp.nombre LIKE ?)`;
-    const params: any[] = [searchPattern, searchPattern];
+    let where = `WHERE (bp.numero_identificacion LIKE ? OR bp.nombre LIKE ? OR bp.numero_expediente LIKE ?)`;
+    const params: any[] = [searchPattern, searchPattern, searchPattern];
 
     if (role !== 'admin') {
       where += ` AND bpay.user_id = ?`;

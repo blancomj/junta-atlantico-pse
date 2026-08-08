@@ -300,6 +300,7 @@ import { ref, reactive, computed, watch, onMounted, Ref, ComputedRef } from 'vue
 import BankList from './BankList.vue';
 import apiService from '../services/api.service';
 import batchPaymentService from '../services/batch-payment.service';
+import authService from '../services/auth.service';
 import { useReCaptcha } from '../composables/useReCaptcha';
 import { validateForm, validateNoForbiddenChars, ValidationErrors } from '../utils/validators';
 import { getErrorMessage } from '../utils/errorMessages';
@@ -438,6 +439,17 @@ async function loadBatchPayment(): Promise<void> {
     form.description = `Pago lote - ${detail.file_name}`.substring(0, 80);
     form.reference1 = detail.beneficiaries?.[0]?.numero_identificacion || '';
     form.reference2 = detail.beneficiaries?.[0]?.nombre || detail.file_name;
+    
+    // Pre-fill payer data from batch payment
+    if (detail.direccion) {
+      form.address = detail.direccion;
+    }
+    if (detail.telefono) {
+      form.cellphoneNumber = detail.telefono;
+    }
+
+    // Pre-fill from user data for fields not in batch payment
+    prefillFromUserData();
   } catch (e: any) {
     error.value = 'Error al cargar datos del proceso de pago';
   } finally {
@@ -448,8 +460,25 @@ async function loadBatchPayment(): Promise<void> {
 onMounted(() => {
   if (props.batchPaymentId) {
     loadBatchPayment();
+  } else {
+    // Pre-fill from user data for individual payments
+    prefillFromUserData();
   }
 });
+
+function prefillFromUserData(): void {
+  const user = authService.getUser();
+  if (!user) return;
+
+  // Entity is always a company
+  form.userType = 'company';
+  form.identificationType = 'NIT';
+  form.identificationNumber = user.nit || '';
+  form.fullName = user.name || '';
+  form.email = user.email || '';
+  form.address = user.direccion || '';
+  form.cellphoneNumber = user.telefono || '';
+}
 
 async function handleSubmit(): Promise<void> {
   error.value = '';

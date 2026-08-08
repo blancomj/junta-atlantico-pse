@@ -2,10 +2,6 @@
   <div class="min-h-screen bg-gray-50">
     <NavBar />
     <div class="max-w-7xl mx-auto px-4 py-8">
-      <div class="mb-6">
-        <h1 class="text-2xl font-bold text-gray-900">Mis Procesos de Pago</h1>
-      </div>
-
       <!-- Filters -->
       <div class="bg-blue-50 rounded-lg shadow p-4 mb-6 flex gap-4 items-end">
         <div>
@@ -30,6 +26,28 @@
       <!-- DataTable -->
       <DataTable v-else :columns="columns" :data="payments" row-key="id" :searchable="false"
         :page-size="15">
+        <template #toolbar>
+          <div class="flex items-center gap-2">
+            <div class="relative">
+              <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input v-model="beneficiarySearch" @keyup.enter="searchBeneficiary" type="text"
+                placeholder="Paciente, identificacion o expediente..."
+                class="pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 w-72" />
+              <button v-if="beneficiarySearch" @click="clearBeneficiarySearch"
+                class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <button @click="searchBeneficiary"
+              class="px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-md hover:bg-gray-200 font-medium">
+              Buscar
+            </button>
+          </div>
+        </template>
         <template #cell-num="slotProps">
           {{ payments.findIndex(p => p.id === (slotProps as any).row.id) + 1 }}
         </template>
@@ -66,6 +84,7 @@ import { ref, onMounted } from 'vue';
 import NavBar from '../../components/NavBar.vue';
 import DataTable, { type Column } from '../../components/DataTable.vue';
 import batchPaymentService from '../../services/batch-payment.service';
+import authService from '../../services/auth.service';
 import { BatchPayment } from '../../types/batch-payment.types';
 
 const columns: Column[] = [
@@ -83,6 +102,7 @@ const columns: Column[] = [
 const payments = ref<BatchPayment[]>([]);
 const loading = ref(false);
 const filterEstado = ref('');
+const beneficiarySearch = ref('');
 
 function statusClass(estado: string) {
   const c: Record<string, string> = {
@@ -117,6 +137,35 @@ async function loadPayments() {
   } finally {
     loading.value = false;
   }
+}
+
+async function searchBeneficiary() {
+  if (!beneficiarySearch.value || beneficiarySearch.value.trim().length < 2) {
+    loadPayments();
+    return;
+  }
+
+  loading.value = true;
+  try {
+    const token = authService.getToken();
+    const baseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:3000/api/pse').replace(/\/pse$/, '');
+    const res = await fetch(`${baseUrl}/batch-payments/search-beneficiary?q=${encodeURIComponent(beneficiarySearch.value)}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!res.ok) throw new Error('Error en la busqueda');
+    const json = await res.json();
+    payments.value = json.data || [];
+  } catch (e) {
+    console.error('Error searching beneficiary', e);
+    payments.value = [];
+  } finally {
+    loading.value = false;
+  }
+}
+
+function clearBeneficiarySearch() {
+  beneficiarySearch.value = '';
+  loadPayments();
 }
 
 onMounted(loadPayments);

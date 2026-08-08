@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 
 const FORBIDDEN_CHARS_REGEX = /[|"]/;
 const HTML_ESCAPE_REGEX = /[<>&"']/g;
+const DANGEROUS_KEYS = ['__proto__', 'constructor', 'prototype'];
 
 function sanitizeString(value: string): string {
   return value
@@ -12,6 +13,11 @@ function sanitizeString(value: string): string {
 function sanitizeObject(obj: Record<string, any>): Record<string, any> {
   const sanitized: Record<string, any> = {};
   for (const [key, value] of Object.entries(obj)) {
+    // Filtrar keys peligrosas que podrían causar prototype pollution
+    if (DANGEROUS_KEYS.includes(key)) {
+      continue;
+    }
+
     if (typeof value === 'string') {
       sanitized[key] = sanitizeString(value);
     } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
