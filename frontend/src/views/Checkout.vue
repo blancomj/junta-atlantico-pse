@@ -4,13 +4,16 @@
       <!-- Header -->
       <div class="text-center mb-8">
         <img src="/junta-atlantico-logo.svg" alt="Junta Atlantico" class="h-16 mx-auto mb-4" />
-        <h1 class="text-2xl font-bold text-gray-900">Pago PSE</h1>
+        <h1 class="text-2xl font-bold text-gray-900">
+          {{ batchPaymentId ? 'Pago PSE - Lote' : 'Pago PSE' }}
+        </h1>
         <p class="text-gray-600 mt-1">Junta Regional de Calificacion de Invalidez del Atlantico</p>
       </div>
 
       <!-- Formulario -->
       <div class="bg-white rounded-xl shadow-lg overflow-hidden p-6">
         <PaymentForm
+          :batchPaymentId="batchPaymentId"
           @success="handleSuccess"
           @error="handleError"
           @cancel="handleCancel"
@@ -27,7 +30,8 @@
 </template>
 
 <script setup lang="ts">
-import { useRouter } from 'vue-router';
+import { computed } from 'vue';
+import { useRouter, useRoute } from 'vue-router';
 import PaymentForm from '../components/PaymentForm.vue';
 
 interface SuccessPayload {
@@ -41,15 +45,22 @@ interface ErrorPayload {
 }
 
 const router = useRouter();
+const route = useRoute();
+
+const batchPaymentId = computed(() => route.params.batchPaymentId as string | undefined);
 
 function handleSuccess({ trazabilityCode, pseURL }: SuccessPayload): void {
   if (pseURL) {
     window.location.href = pseURL;
   } else {
-    router.push({
-      name: 'PaymentReturn',
-      query: { trazabilityCode }
-    });
+    if (batchPaymentId.value) {
+      router.push({ name: 'BatchDetail', params: { id: batchPaymentId.value } });
+    } else {
+      router.push({
+        name: 'PaymentReturn',
+        query: { trazabilityCode }
+      });
+    }
   }
 }
 
@@ -58,7 +69,11 @@ function handleError({ code, message }: ErrorPayload): void {
 }
 
 function handleCancel(): void {
-  router.push('/');
+  if (batchPaymentId.value) {
+    router.push({ name: 'BatchDetail', params: { id: batchPaymentId.value } });
+  } else {
+    router.push('/');
+  }
 }
 
 function handleLoading(_isLoading: boolean): void {

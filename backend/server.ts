@@ -1,16 +1,24 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+import dns from 'dns';
+dns.setDefaultResultOrder('ipv4first');
+
 import express, { Express } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import config from './config/pse.config';
 import pseRoutes from './routes/pse.routes';
+import authRoutes from './src/modules/auth/routes/auth.routes';
+import adminRoutes from './src/modules/admin/routes/admin.routes';
+import batchPaymentRoutes from './src/modules/batch-payments/routes/batch-payment.routes';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware';
 import { securityHeaders, validateOrigin, getAllowedOrigins } from './middleware/securityHeaders.middleware';
 import { requestIdMiddleware } from './middleware/requestId.middleware';
 import { sanitizeInput } from './middleware/sanitize.middleware';
+import { testConnection, closePool } from './src/database/connection';
+import { runMigrations } from './src/database/migrator';
 import logger from './utils/logger';
 
 const app: Express = express();
@@ -54,7 +62,7 @@ app.use(helmet({
 app.use(cors({
   origin: getAllowedOrigins(),
   credentials: true,
-  methods: ['GET', 'POST', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id', 'X-Recaptcha-Token']
 }));
 
@@ -78,6 +86,9 @@ app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 
 // Rutas
 app.use('/api/pse', pseRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/batch-payments', batchPaymentRoutes);
 
 // 404
 app.use(notFoundHandler);
@@ -85,11 +96,45 @@ app.use(notFoundHandler);
 // Error global
 app.use(errorHandler);
 
-app.listen(PORT, () => {
-  logger.info(`Servidor PSE ejecutandose en puerto ${PORT}`);
-  logger.info(`Entorno: ${config.env}`);
-  logger.info(`reCAPTCHA: ${config.recaptcha.secret ? 'activo' : 'INACTIVO'}`);
-  logger.info(`Rate Limit: ${config.rateLimit.max} req/${config.rateLimit.windowMs / 1000}s`);
+async function startServer() {
+  try {
+    // Test database connection
+    const dbConnected = await testConnection();
+    if (!dbConnected) {
+      logger.error('Failed to connect to database. Exiting...');
+      process.exit(1);
+    }
+
+    // Run migrations
+    await runMigrations();
+
+    // Start server
+    app.listen(PORT, () => {
+      logger.info(`Servidor PSE ejecutandose en puerto ${PORT}`);
+      logger.info(`Entorno: ${config.env}`);
+      logger.info(`reCAPTCHA: ${config.recaptcha.secret ? 'activo' : 'INACTIVO'}`);
+      logger.info(`Rate Limit: ${config.rateLimit.max} req/${config.rateLimit.windowMs / 1000}s`);
+      logger.info(`Base de datos: MySQL conectado`);
+    });
+  } catch (error) {
+    logger.error('Error starting server:', (error as Error).message);
+    process.exit(1);
+  }
+}
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  logger.info('SIGTERM received. Shutting down gracefully...');
+  await closePool();
+  process.exit(0);
 });
+
+process.on('SIGINT', async () => {
+  logger.info('SIGINT received. Shutting down gracefully...');
+  await closePool();
+  process.exit(0);
+});
+
+startServer();
 
 export default app;

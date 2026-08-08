@@ -13,7 +13,7 @@
       <div class="grid grid-cols-3 gap-4">
         <div class="col-span-1">
           <label for="patientId" class="block text-sm font-medium text-gray-700 mb-1">
-            No.Identificación <span class="text-red-500">*</span>
+            No. Identificación <span class="text-red-500">*</span>
           </label>
           <input
             id="patientId"
@@ -296,9 +296,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, watch, Ref, ComputedRef } from 'vue';
+import { ref, reactive, computed, watch, onMounted, Ref, ComputedRef } from 'vue';
 import BankList from './BankList.vue';
 import apiService from '../services/api.service';
+import batchPaymentService from '../services/batch-payment.service';
 import { useReCaptcha } from '../composables/useReCaptcha';
 import { validateForm, validateNoForbiddenChars, ValidationErrors } from '../utils/validators';
 import { getErrorMessage } from '../utils/errorMessages';
@@ -326,13 +327,12 @@ interface FormData {
   amount: number | null;
   userType: string;
   identificationType: string;
-  // Datos del PACIENTE (persona calificada — puede diferir del pagador)
-  // Se envían a PSE como referenceNumber1 y referenceNumber2 (Requisito #13)
-  reference1: string;   // identificación del paciente
-  reference2: string;   // nombre completo del paciente
-  reference3?: string;  // trazabilidad interna (ticketId — generado por backend)
+  reference1: string;
+  reference2: string;
+  reference3?: string;
   serviceCode?: string;
   vat?: number;
+  batchPaymentId?: string;
 }
 
 interface ApiResponse {
@@ -346,6 +346,10 @@ interface ApiResponse {
   code?: string;
 }
 
+const props = defineProps<{
+  batchPaymentId?: string;
+}>();
+
 const emit = defineEmits<{
   (e: 'success', payload: SuccessPayload): void;
   (e: 'cancel'): void;
@@ -357,6 +361,7 @@ const loading: Ref<boolean> = ref(false);
 const error: Ref<string> = ref('');
 const fieldErrors: Ref<ValidationErrors> = ref({});
 const loadingMessage: Ref<string> = ref('Procesando...');
+const batchPaymentLoading: Ref<boolean> = ref(false);
 
 const { init: initRecaptcha } = useReCaptcha();
 initRecaptcha();
@@ -374,9 +379,10 @@ const form: FormData = reactive({
   bankCode: '',
   serviceCode: import.meta.env.VITE_PSE_SERVICE_CODE || '',
   vat: 0,
-  reference1: '',   // identificación del paciente
-  reference2: '',   // nombre del paciente
-  reference3: ''    // trazabilidad interna (backend lo completa con ticketId)
+  reference1: '',
+  reference2: '',
+  reference3: '',
+  batchPaymentId: props.batchPaymentId || ''
 });
 
 const isFormValid: ComputedRef<boolean> = computed(() => {
@@ -389,8 +395,8 @@ const isFormValid: ComputedRef<boolean> = computed(() => {
     form.address?.trim() &&
     form.amount && form.amount > 0 &&
     form.description?.trim() &&
-    form.reference1?.trim() &&   // ID del paciente obligatorio
-    form.reference2?.trim()      // Nombre del paciente obligatorio
+    form.reference1?.trim() &&
+    form.reference2?.trim()
   );
 });
 
@@ -421,6 +427,30 @@ watch(loading, (newVal: boolean) => {
   emit('loading', newVal);
 });
 
+async function loadBatchPayment(): Promise<void> {
+  if (!props.batchPaymentId) return;
+
+  batchPaymentLoading.value = true;
+  try {
+    const detail = await batchPaymentService.getDetail(props.batchPaymentId);
+
+    form.amount = detail.monto_total;
+    form.description = `Pago lote - ${detail.file_name}`.substring(0, 80);
+    form.reference1 = detail.beneficiaries?.[0]?.numero_identificacion || '';
+    form.reference2 = detail.beneficiaries?.[0]?.nombre || detail.file_name;
+  } catch (e: any) {
+    error.value = 'Error al cargar datos del proceso de pago';
+  } finally {
+    batchPaymentLoading.value = false;
+  }
+}
+
+onMounted(() => {
+  if (props.batchPaymentId) {
+    loadBatchPayment();
+  }
+});
+
 async function handleSubmit(): Promise<void> {
   error.value = '';
   fieldErrors.value = {};
@@ -441,7 +471,10 @@ async function handleSubmit(): Promise<void> {
   loading.value = true;
 
   try {
-    const response: ApiResponse = await apiService.createTransaction(form) as ApiResponse;
+    const response: ApiResponse = await apiService.createTransaction({
+      ...form,
+      batchPaymentId: props.batchPaymentId || undefined
+    }) as ApiResponse;
 
     if (response.success && response.data) {
       sessionStorage.setItem('pse_trazability_code', response.data.trazabilityCode);
