@@ -5,7 +5,15 @@
 
       <!-- Filtros -->
       <div class="bg-blue-50 rounded-lg shadow p-4 mb-6">
-        <div class="grid grid-cols-1 sm:grid-cols-5 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-6 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Tipo</label>
+            <select v-model="filters.tipo" class="w-full px-3 py-2 border rounded-lg text-sm">
+              <option value="">Todos</option>
+              <option value="individual">Individual</option>
+              <option value="lote">Lote</option>
+            </select>
+          </div>
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">Estado</label>
             <select v-model="filters.estado" class="w-full px-3 py-2 border rounded-lg text-sm">
@@ -71,13 +79,19 @@
         <template #cell-num="slotProps">
           {{ getRowIndex((slotProps as any).row) }}
         </template>
+        <template #cell-user_name="slotProps">
+          {{ entidadLabel((slotProps as any).row) }}
+        </template>
         <template #cell-estado="{ value }">
-          <span :class="statusClass(value)" class="px-2 py-1 text-xs rounded-full">
+          <span :class="statusClass(value)" class="px-2 py-1 text-xs rounded-full whitespace-nowrap">
             {{ statusLabel(value) }}
           </span>
         </template>
-        <template #cell-monto_total="{ value }">
-          <span class="font-medium">${{ formatCurrency(Number(value)) }}</span>
+        <template #cell-monto_total="slotProps">
+          <span class="font-medium" :class="{ 'text-gray-400': (slotProps as any).row.estado === 'anulado' }">
+            <template v-if="(slotProps as any).row.estado === 'anulado'">(${{ formatCurrency(Number((slotProps as any).value)) }})</template>
+            <template v-else>${{ formatCurrency(Number((slotProps as any).value)) }}</template>
+          </span>
         </template>
         <template #cell-banco_pago="{ value }">
           {{ value || '—' }}
@@ -101,7 +115,7 @@
       <!-- Exportar debajo de la tabla -->
       <div class="mt-4 flex items-center gap-4">
         <button @click="exportExcel" :disabled="payments.length === 0 || exporting"
-          class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 text-sm font-medium">
+          class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm font-medium">
           {{ exporting ? 'Generando...' : 'Exportar a Excel' }}
         </button>
         <label class="flex items-center gap-2 text-sm text-gray-700">
@@ -127,11 +141,11 @@ import { BatchPayment, BatchPaymentBeneficiary } from '../../types/batch-payment
 interface UserOption { id: string; full_name: string; email: string; }
 
 const columns: Column[] = [
-  { key: 'num', label: '#', align: 'center', sortable: false },
+  { key: 'num', label: '#', align: 'center', sortable: false, class: 'w-10' },
   { key: 'file_name', label: 'Archivo' },
-  { key: 'estado', label: 'Estado' },
+  { key: 'estado', label: 'Estado', class: 'whitespace-nowrap' },
   { key: 'user_name', label: 'Entidad' },
-  { key: 'total_beneficiarios', label: 'Beneficiarios', align: 'right' },
+  { key: 'total_beneficiarios', label: 'Cant.', align: 'right', class: 'w-16' },
   { key: 'monto_total', label: 'Monto', align: 'right' },
   { key: 'banco_pago', label: 'Banco' },
   { key: 'documento_pago', label: 'No. Transferencia' },
@@ -148,13 +162,23 @@ const beneficiarySearch = ref('');
 
 const filters = ref({
   estado: '',
+  tipo: '',
   userId: '',
   fechaDesde: '',
   fechaHasta: ''
 });
 
-const sumMonto = computed(() => payments.value.reduce((s, p) => s + Number(p.monto_total || 0), 0));
-const sumBeneficiarios = computed(() => payments.value.reduce((s, p) => s + Number(p.total_beneficiarios || 0), 0));
+function entidadLabel(row: BatchPayment): string {
+  return row.tipo === 'individual' ? (row.beneficiary_documento || '—') : (row.user_name || '');
+}
+
+// Los procesos anulados no suman ni cuentan en los totales
+const sumMonto = computed(() => payments.value
+  .filter(p => p.estado !== 'anulado')
+  .reduce((s, p) => s + Number(p.monto_total || 0), 0));
+const sumBeneficiarios = computed(() => payments.value
+  .filter(p => p.estado !== 'anulado')
+  .reduce((s, p) => s + Number(p.total_beneficiarios || 0), 0));
 
 const selectedEntityName = computed(() => {
   if (!filters.value.userId) return '';
@@ -192,6 +216,7 @@ async function loadData() {
   try {
     const params: Record<string, any> = { page: 1, pageSize: 10000 };
     if (filters.value.estado) params.estado = filters.value.estado;
+    if (filters.value.tipo) params.tipo = filters.value.tipo;
     if (filters.value.userId) params.userId = filters.value.userId;
     if (filters.value.fechaDesde) params.fechaDesde = filters.value.fechaDesde;
     if (filters.value.fechaHasta) params.fechaHasta = filters.value.fechaHasta;
@@ -250,16 +275,16 @@ async function exportExcel() {
 
         if (beneficiaries.length === 0) {
           rows.push([
-            rowNum, p.file_name, estadoLabel, p.user_name || '', p.total_beneficiarios, p.monto_total,
+            rowNum, p.file_name, estadoLabel, entidadLabel(p), p.total_beneficiarios, p.monto_total,
             p.banco_pago || '', p.documento_pago || '', fechaPago, fechaCreacion,
             '', '', '', '', ''
           ]);
         } else {
           for (const b of beneficiaries) {
             rows.push([
-              rowNum, p.file_name, estadoLabel, p.user_name || '', p.total_beneficiarios, p.monto_total,
+              rowNum, p.file_name, estadoLabel, entidadLabel(p), p.total_beneficiarios, p.monto_total,
               p.banco_pago || '', p.documento_pago || '', fechaPago, fechaCreacion,
-              b.numero_identificacion, b.nombre, b.numero_expediente, b.valor,
+              b.numero_identificacion, b.nombre, b.numero_expediente || '', b.valor,
               b.estado === 'pagado' ? 'Pagado' : 'Pendiente'
             ]);
           }
@@ -285,7 +310,7 @@ async function exportExcel() {
           i + 1,
           p.file_name,
           statusLabel(p.estado),
-          p.user_name || '',
+          entidadLabel(p),
           p.total_beneficiarios,
           p.monto_total,
           p.banco_pago || '',

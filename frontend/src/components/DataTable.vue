@@ -24,7 +24,7 @@
           <tr>
             <th v-for="col in columns" :key="col.key"
               class="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider"
-              :class="[col.align === 'right' ? 'text-right' : '', col.align === 'center' ? 'text-center' : '', col.sortable !== false ? 'cursor-pointer select-none hover:text-gray-700' : '']"
+              :class="[col.align === 'right' ? 'text-right' : '', col.align === 'center' ? 'text-center' : '', col.sortable !== false ? 'cursor-pointer select-none hover:text-gray-700' : '', col.class || '']"
               @click="col.sortable !== false && toggleSort(col.key)">
               <div class="flex items-center gap-1" :class="[col.align === 'right' ? 'justify-end' : '', col.align === 'center' ? 'justify-center' : '']">
                 {{ col.label }}

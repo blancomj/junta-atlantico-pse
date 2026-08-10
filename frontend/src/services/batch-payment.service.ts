@@ -90,7 +90,7 @@ class BatchPaymentService {
     return response.data.data;
   }
 
-  async list(params?: { page?: number; pageSize?: number; estado?: string; userId?: string; fechaDesde?: string; fechaHasta?: string }): Promise<{ data: BatchPayment[]; total: number }> {
+  async list(params?: { page?: number; pageSize?: number; estado?: string; tipo?: string; userId?: string; fechaDesde?: string; fechaHasta?: string }): Promise<{ data: BatchPayment[]; total: number }> {
     const response = await this.client.get('/batch-payments', { params });
     return response.data;
   }

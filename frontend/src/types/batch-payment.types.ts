@@ -1,8 +1,11 @@
 export interface BatchPayment {
   id: string;
-  entity_id: string;
-  user_id: string;
+  entity_id: string | null;
+  user_id: string | null;
+  tipo: 'individual' | 'lote';
   user_name?: string;
+  /** Solo presente cuando tipo='individual': documento del paciente (unico beneficiario) */
+  beneficiary_documento?: string;
   file_name: string;
   direccion?: string;
   telefono?: string;
@@ -22,7 +25,7 @@ export interface BatchPaymentBeneficiary {
   id: string;
   numero_identificacion: string;
   nombre: string;
-  numero_expediente: string;
+  numero_expediente: string | null;
   valor: number;
   estado: 'pendiente' | 'pagado';
 }

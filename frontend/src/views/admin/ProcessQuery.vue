@@ -236,7 +236,7 @@ async function exportExcel() {
             rows.push([
               rowNum, p.file_name, estadoLabel, p.user_name || '', p.total_beneficiarios, p.monto_total,
               p.banco_pago || '', p.documento_pago || '', fechaPago, fechaCreacion,
-              b.numero_identificacion, b.nombre, b.numero_expediente, b.valor,
+              b.numero_identificacion, b.nombre, b.numero_expediente || '', b.valor,
               b.estado === 'pagado' ? 'Pagado' : 'Pendiente'
             ]);
           }

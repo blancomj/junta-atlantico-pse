@@ -1,7 +1,8 @@
 export interface BatchPayment {
   id: string;
-  entity_id: string;
-  user_id: string;
+  entity_id: string | null;
+  user_id: string | null;
+  tipo: 'individual' | 'lote';
   file_name: string;
   estado: 'por_pagar' | 'pagado' | 'anulado';
   total_beneficiarios: number;
@@ -15,6 +16,8 @@ export interface BatchPayment {
   expires_at: Date;
   created_at: Date;
   updated_at: Date;
+  /** Solo presente en list() cuando tipo='individual': documento del paciente (unico beneficiario) */
+  beneficiary_documento?: string;
 }
 
 export interface BatchPaymentBeneficiary {
@@ -22,10 +25,21 @@ export interface BatchPaymentBeneficiary {
   batch_payment_id: string;
   numero_identificacion: string;
   nombre: string;
-  numero_expediente: string;
+  numero_expediente: string | null;
   valor: number;
   estado: 'pendiente' | 'pagado';
   created_at: Date;
+}
+
+export interface IndividualPaymentData {
+  patientId: string;
+  patientName: string;
+  payerAddress: string;
+  payerPhone: string;
+  amount: number;
+  trazabilityCode: string;
+  bancoPago: string;
+  documentoPago: string;
 }
 
 export interface BatchPaymentAttempt {
@@ -63,6 +77,7 @@ export interface BatchPaymentListQuery {
   page?: number;
   pageSize?: number;
   estado?: string;
+  tipo?: string;
   userId?: string;
   fechaDesde?: string;
   fechaHasta?: string;

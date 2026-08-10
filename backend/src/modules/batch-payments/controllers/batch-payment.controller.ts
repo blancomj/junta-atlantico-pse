@@ -51,7 +51,7 @@ class BatchPaymentController {
   async list(req: Request, res: Response): Promise<void> {
     try {
       const user = req.user as AuthUser;
-      const { page, pageSize, estado, userId, fechaDesde, fechaHasta } = req.query;
+      const { page, pageSize, estado, tipo, userId, fechaDesde, fechaHasta } = req.query;
 
       const result = await batchPaymentService.list(
         user.id,
@@ -61,6 +61,7 @@ class BatchPaymentController {
           page: page ? parseInt(page as string) : 1,
           pageSize: pageSize ? parseInt(pageSize as string) : 20,
           estado: estado as string,
+          tipo: tipo as string,
           userId: userId as string,
           fechaDesde: fechaDesde as string,
           fechaHasta: fechaHasta as string

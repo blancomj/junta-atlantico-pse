@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { getPool } from '../../../database/connection';
-import { BatchPayment, BatchPaymentBeneficiary, UploadResult, BatchPaymentListQuery, BatchPaymentListResponse } from '../types/batch-payment.types';
+import { BatchPayment, BatchPaymentBeneficiary, UploadResult, BatchPaymentListQuery, BatchPaymentListResponse, IndividualPaymentData } from '../types/batch-payment.types';
 import excelParser from './excel-parser.service';
 import logger from '../../../../utils/logger';
 
@@ -89,6 +89,49 @@ class BatchPaymentService {
     }
   }
 
+  // Registra un pago individual (checkout publico, sin entidad ni usuario logueado)
+  // ya confirmado como exitoso, reutilizando las mismas tablas que los pagos por lote.
+  async createIndividualPayment(data: IndividualPaymentData): Promise<BatchPayment> {
+    const pool = getPool();
+    const connection = await pool.getConnection();
+
+    try {
+      await connection.beginTransaction();
+
+      const paymentId = crypto.randomUUID();
+
+      await connection.query(
+        `INSERT INTO batch_payments
+           (id, entity_id, user_id, tipo, file_name, direccion, telefono, estado,
+            total_beneficiarios, monto_total, trazability_code, banco_pago, documento_pago,
+            fecha_pago, expires_at)
+         VALUES (?, NULL, NULL, 'individual', ?, ?, ?, 'pagado', 1, ?, ?, ?, ?, NOW(), NOW())`,
+        [
+          paymentId, data.patientName, data.payerAddress || null, data.payerPhone || null,
+          data.amount, data.trazabilityCode, data.bancoPago || null, data.documentoPago || null
+        ]
+      );
+
+      await connection.query(
+        `INSERT INTO batch_payment_beneficiaries
+           (id, batch_payment_id, numero_identificacion, nombre, numero_expediente, valor, estado)
+         VALUES (?, ?, ?, ?, NULL, ?, 'pagado')`,
+        [crypto.randomUUID(), paymentId, data.patientId, data.patientName, data.amount]
+      );
+
+      await connection.commit();
+
+      logger.info(`Pago individual registrado: ${paymentId} (CUS ${data.trazabilityCode})`);
+
+      return this.findById(paymentId);
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
   async findById(id: string): Promise<BatchPayment> {
     const pool = getPool();
     const [rows] = await pool.query('SELECT * FROM batch_payments WHERE id = ?', [id]) as any[];
@@ -127,6 +170,11 @@ class BatchPaymentService {
       params.push(query.estado);
     }
 
+    if (query.tipo) {
+      where += ' AND tipo = ?';
+      params.push(query.tipo);
+    }
+
     if (query.userId) {
       where += ' AND user_id = ?';
       params.push(query.userId);
@@ -145,7 +193,11 @@ class BatchPaymentService {
     const [countRows] = await pool.query(`SELECT COUNT(*) as total FROM batch_payments ${where}`, params) as any[];
     const total = countRows[0].total;
 
-    const selectExtra = role === 'admin' ? ', eu.full_name as user_name' : '';
+    const selectExtra = role === 'admin'
+      ? `, eu.full_name as user_name,
+         (SELECT numero_identificacion FROM batch_payment_beneficiaries
+          WHERE batch_payment_id = batch_payments.id LIMIT 1) as beneficiary_documento`
+      : '';
     const joinExtra = role === 'admin' ? ' LEFT JOIN entity_users eu ON batch_payments.user_id = eu.id' : '';
 
     const [dataRows] = await pool.query(

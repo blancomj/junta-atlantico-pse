@@ -62,7 +62,7 @@
 
             <div v-if="store.currentPayment.estado === 'por_pagar'" class="flex items-center gap-2 flex-shrink-0 ml-4">
               <button @click="showPayModal = true"
-                class="px-4 py-1.5 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors flex items-center gap-1.5">
+                class="px-4 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-1.5">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
                 </svg>
@@ -106,7 +106,7 @@
             <div class="flex gap-4 justify-end">
               <button @click="showPayModal = false" class="px-4 py-2 border rounded-lg">Cancelar</button>
               <button @click="handlePay"
-                class="px-4 py-2 bg-green-600 text-white rounded-lg">
+                class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
                 Continuar al pago
               </button>
             </div>

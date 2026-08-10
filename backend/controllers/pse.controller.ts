@@ -4,6 +4,7 @@ import bankListService from '../services/bankList.service';
 import { FINAL_STATES } from '../config/constants';
 import doublePaymentService from '../services/doublePayment.service';
 import batchPaymentService from '../src/modules/batch-payments/services/batch-payment.service';
+import pendingIndividualPayment from '../services/pendingIndividualPayment.service';
 import { getPSEErrorMessage } from '../utils/errorMessages';
 import logger from '../utils/logger';
 import { CreateTransactionInput } from '../validation/schemas';
@@ -95,6 +96,19 @@ class PSEController {
             logger.error('Error actualizando estado del lote:', (batchError as Error).message);
             // No fallar la transacción PSE por error en el lote
           }
+        } else if (result.trazabilityCode) {
+          // Pago individual (checkout publico, sin batchPaymentId): se cachean los
+          // datos del formulario para registrarlos en batch_payments solo si el
+          // pago se confirma exitoso (ver getTransactionStatus).
+          pendingIndividualPayment.set(result.trazabilityCode, {
+            patientId: paymentData.reference1 || '',
+            patientName: paymentData.reference2 || '',
+            payerAddress: paymentData.address || '',
+            payerPhone: paymentData.cellphoneNumber || '',
+            amount: Number(paymentData.amount),
+            description: paymentData.description || '',
+            bankCode: paymentData.bankCode
+          });
         }
 
         res.json({
@@ -162,12 +176,33 @@ class PSEController {
       }
 
       if (result.transactionState && FINAL_STATES.includes(result.transactionState as any)) {
-        try {
-          if (result.transactionState === 'OK') {
+        if (result.transactionState === 'OK') {
+          try {
             await pseService.finalizeTransaction(trazabilityCode, result.authorizationID || null);
+          } catch (finalizeError) {
+            logger.warn('Error al finalizar transaccion:', (finalizeError as Error).message);
           }
-        } catch (finalizeError) {
-          logger.warn('Error al finalizar transaccion:', (finalizeError as Error).message);
+
+          // Si es un pago individual pendiente de registrar, se persiste ahora
+          // que PSE confirmo el estado OK (ver createTransaction).
+          try {
+            const pending = pendingIndividualPayment.consume(trazabilityCode);
+            if (pending) {
+              await batchPaymentService.createIndividualPayment({
+                patientId: pending.patientId,
+                patientName: pending.patientName,
+                payerAddress: pending.payerAddress,
+                payerPhone: pending.payerPhone,
+                amount: pending.amount,
+                trazabilityCode,
+                bancoPago: pending.bankCode,
+                documentoPago: result.authorizationID || ''
+              });
+              logger.info(`Pago individual registrado en BD: CUS=${trazabilityCode}`);
+            }
+          } catch (persistError) {
+            logger.error('Error registrando pago individual:', (persistError as Error).message);
+          }
         }
       }
 

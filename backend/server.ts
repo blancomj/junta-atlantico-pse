@@ -1,5 +1,9 @@
 import dotenv from 'dotenv';
-dotenv.config();
+import path from 'path';
+
+// Cargar .env.development si NODE_ENV=development, si no .env (mismo criterio que src/database/apply-migrations.ts)
+const envFile = process.env.NODE_ENV === 'development' ? '.env.development' : '.env';
+dotenv.config({ path: path.join(__dirname, envFile) });
 
 import dns from 'dns';
 dns.setDefaultResultOrder('ipv4first');
@@ -20,6 +24,7 @@ import { sanitizeInput } from './middleware/sanitize.middleware';
 import { testConnection, closePool } from './src/database/connection';
 import { runMigrations } from './src/database/migrator';
 import excelParser from './src/modules/batch-payments/services/excel-parser.service';
+import pendingIndividualPayment from './services/pendingIndividualPayment.service';
 import logger from './utils/logger';
 
 const app: Express = express();
@@ -111,6 +116,7 @@ async function startServer() {
 
     // Start Excel cache cleanup
     excelParser.startCleanup();
+    pendingIndividualPayment.startCleanup();
 
     // Start server
     app.listen(PORT, () => {
@@ -130,6 +136,7 @@ async function startServer() {
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received. Shutting down gracefully...');
   excelParser.stopCleanup();
+  pendingIndividualPayment.stopCleanup();
   await closePool();
   process.exit(0);
 });
@@ -137,6 +144,7 @@ process.on('SIGTERM', async () => {
 process.on('SIGINT', async () => {
   logger.info('SIGINT received. Shutting down gracefully...');
   excelParser.stopCleanup();
+  pendingIndividualPayment.stopCleanup();
   await closePool();
   process.exit(0);
 });

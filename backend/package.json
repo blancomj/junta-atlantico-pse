@@ -6,7 +6,7 @@
   "scripts": {
     "build": "echo \"Build omitido: dist/ incluido en el zip\"",
     "start": "node dist/backend/server.js",
-    "dev": "ts-node server.ts",
+    "dev": "cross-env NODE_ENV=development ts-node server.ts",
     "test": "jest --forceExit --detectOpenHandles",
     "test:integration": "jest tests/integration --forceExit --detectOpenHandles",
     "lint": "eslint .",

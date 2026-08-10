@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router';
+import Home from '../views/Home.vue';
 import Checkout from '../views/Checkout.vue';
 import PaymentReturn from '../views/PaymentReturn.vue';
 import Login from '../views/auth/Login.vue';
@@ -15,7 +16,7 @@ import NewPayment from '../views/batch-payments/NewPayment.vue';
 import { requireAuth, requireAdmin, requireGuest } from '../guards/auth.guard';
 
 const routes: RouteRecordRaw[] = [
-  { path: '/', redirect: '/login' },
+  { path: '/', name: 'Home', component: Home },
 
   // Public
   { path: '/login', name: 'Login', component: Login, beforeEnter: requireGuest },

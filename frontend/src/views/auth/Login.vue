@@ -2,9 +2,20 @@
   <div class="min-h-screen bg-gray-50 flex items-center justify-center p-4">
     <div class="max-w-md w-full">
       <div class="text-center mb-8">
-        <img src="/junta-atlantico-logo.svg" alt="Junta Atlantico" class="h-16 mx-auto mb-4" />
-        <h1 class="text-2xl font-bold text-gray-900">Pago PSE - Entidades</h1>
-        <p class="text-gray-600 mt-1">Junta Regional de Calificacion de Invalidez del Atlantico</p>
+        <div class="flex items-center justify-center gap-5 sm:gap-8 mb-4">
+          <img
+            src="/junta-atlantico-nombre-completo.png"
+            alt="Junta Regional de Calificacion de Invalidez del Atlantico"
+            class="h-10 sm:h-14 w-auto"
+          />
+          <div class="w-px h-9 sm:h-12 bg-gray-300"></div>
+          <img
+            src="/logos-pse.png"
+            alt="PSE - Pagos Seguros en Linea"
+            class="h-10 sm:h-14 w-auto"
+          />
+        </div>
+        <h1 class="text-lg font-bold text-gray-900">Pago PSE - Entidades</h1>
       </div>
 
       <div class="bg-white rounded-xl shadow-lg p-6">
@@ -49,6 +60,12 @@
             </router-link>
           </div>
         </form>
+      </div>
+
+      <div class="text-center mt-6">
+        <router-link to="/" class="text-sm text-gray-500 hover:text-blue-600 transition-colors">
+          &larr; Volver al inicio
+        </router-link>
       </div>
     </div>
   </div>

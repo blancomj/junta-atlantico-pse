@@ -55,7 +55,7 @@
 
         <div class="mt-4 flex gap-4">
           <button @click="handleCreate" :disabled="creating"
-            class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50">
+            class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
             {{ creating ? 'Creando...' : 'Crear Proceso de Pago' }}
           </button>
           <button @click="reset" class="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">
